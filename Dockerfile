@@ -1,37 +1,38 @@
-# Step 1: Build the frontend assets using Node
+# Step 1: Build the frontend assets
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 
-# Step 2: Set up the production PHP environment
+# Step 2: Production PHP + Nginx
 FROM php:8.3-fpm-alpine
 
-# Install system dependencies and Nginx
-RUN apk add --no-cache nginx git unzip supervisor libpng-dev libzip-dev zip
+RUN apk add --no-cache nginx git unzip zip \
+    libpng-dev libjpeg-turbo-dev freetype-dev libwebp-dev libzip-dev postgresql-dev
 
-# Install PHP extensions required by Laravel
-RUN docker-php-ext-install pdo pdo_mysql gd zip
+# gd with jpeg/webp/freetype support (needed by intervention/image).
+# pdo_pgsql is for Render's managed Postgres; remove pdo_mysql if unused.
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp \
+    && docker-php-ext-install -j"$(nproc)" pdo pdo_mysql pdo_pgsql gd zip
 
-# Get the latest Composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
-# Set up working directory
 WORKDIR /var/www/html
 COPY . .
-
-# Copy compiled React assets over from Step 1
 COPY --from=frontend-builder /app/public/build ./public/build
 
-# Set Composer environment parameters
 ENV COMPOSER_ALLOW_SUPERUSER=1
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader --no-interaction
 
-# Fix directory file permissions for Laravel
-RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+RUN mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs \
+    && chown -R www-data:www-data storage bootstrap/cache
 
-# Expose port and start Nginx + PHP-FPM using a basic entrypoint
-EXPOSE 80
-CMD php-fpm -D && nginx -g "daemon off;"
+# Nginx template + startup script
+COPY docker/nginx.conf /etc/nginx/templates/laravel.conf
+COPY docker/start.sh /usr/local/bin/start.sh
+RUN sed -i 's/\r$//' /usr/local/bin/start.sh && chmod +x /usr/local/bin/start.sh
+
+EXPOSE 10000
+CMD ["/usr/local/bin/start.sh"]
