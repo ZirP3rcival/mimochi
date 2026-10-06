@@ -1,4 +1,5 @@
-FROM richarvey/nginx-php-fpm:3.1.6
+# Upgrade the base image to a modern version supporting PHP 8.3/8.4
+FROM richarvey/nginx-php-fpm:latest
 
 # Copy everything into the server
 COPY . /var/www/html
@@ -7,8 +8,11 @@ COPY . /var/www/html
 ENV WEBROOT /var/www/html/public
 ENV APP_ENV production
 
+# Allow composer to execute system tasks safely
+ENV COMPOSER_ALLOW_SUPERUSER 1
+
 # Install project dependencies
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
+RUN composer install --no-dev --optimize-autoloader
 
 # Install Node and compile your React assets via Vite
 RUN apk add --no-cache nodejs npm && \
