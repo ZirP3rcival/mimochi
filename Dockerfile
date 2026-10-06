@@ -1,4 +1,4 @@
-# Upgrade the base image to a modern version supporting PHP 8.3/8.4
+# Keep the latest stable PHP runtime environment
 FROM richarvey/nginx-php-fpm:latest
 
 # Copy everything into the server
@@ -11,8 +11,8 @@ ENV APP_ENV production
 # Allow composer to execute system tasks safely
 ENV COMPOSER_ALLOW_SUPERUSER 1
 
-# Install project dependencies
-RUN composer install --no-dev --optimize-autoloader
+# FIX: Re-introduced platform ignore flags to jump past PHP version caps on dependencies
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
 
 # Install Node and compile your React assets via Vite
 RUN apk add --no-cache nodejs npm && \
