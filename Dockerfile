@@ -1,23 +1,37 @@
-# Keep the latest stable PHP runtime environment
-FROM richarvey/nginx-php-fpm:latest
+# Step 1: Build the frontend assets using Node
+FROM node:20-alpine AS frontend-builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+RUN npm run build
 
-# Copy everything into the server
-COPY . /var/www/html
+# Step 2: Set up the production PHP environment
+FROM php:8.3-fpm-alpine
 
-# Set the working web directory directly to Laravel's public folder
-ENV WEBROOT /var/www/html/public
-ENV APP_ENV production
+# Install system dependencies and Nginx
+RUN apk add --no-cache nginx git unzip supervisor libpng-dev libzip-dev zip
 
-# Allow composer to execute system tasks safely
-ENV COMPOSER_ALLOW_SUPERUSER 1
+# Install PHP extensions required by Laravel
+RUN docker-php-ext-install pdo pdo_mysql gd zip
 
-# FIX: Re-introduced platform ignore flags to jump past PHP version caps on dependencies
-RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
+# Get the latest Composer
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# Install Node and compile your React assets via Vite
-RUN apk add --no-cache nodejs npm && \
-    npm install && \
-    npm run build
+# Set up working directory
+WORKDIR /var/www/html
+COPY . .
 
-# Set correct storage permissions for Laravel
+# Copy compiled React assets over from Step 1
+COPY --from=frontend-builder /app/public/build ./public/build
+
+# Set Composer environment parameters
+ENV COMPOSER_ALLOW_SUPERUSER=1
+RUN composer install --no-dev --optimize-autoloader
+
+# Fix directory file permissions for Laravel
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+
+# Expose port and start Nginx + PHP-FPM using a basic entrypoint
+EXPOSE 80
+CMD php-fpm -D && nginx -g "daemon off;"
