@@ -8,7 +8,7 @@ ENV WEBROOT /var/www/html/public
 ENV APP_ENV production
 
 # Install project dependencies
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs
 
 # Install Node and compile your React assets via Vite
 RUN apk add --no-cache nodejs npm && \
