@@ -20,9 +20,11 @@ return Application::configure(basePath: dirname(__DIR__))
             \Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets::class,
         ]);
 
-        // Register the user_type middleware alias
+        // Register the middleware aliases
         $middleware->alias([
             'user_type' => \App\Http\Middleware\EnsureUserType::class,
+            // module:clients, module:sales ... (user role module access)
+            'module'    => \App\Http\Middleware\EnsureModuleAccess::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

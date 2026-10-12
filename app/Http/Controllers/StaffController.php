@@ -3,9 +3,13 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Models\Position;
 use App\Models\Staff;
+use App\Models\UserRole;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
 class StaffController extends Controller
@@ -17,13 +21,48 @@ class StaffController extends Controller
     private const LIST_LIMIT = 10;
 
     /**
+     * Contact numbers: digits plus the usual + - ( ) and spaces. No letters.
+     */
+    private const PHONE_PATTERN = '/^[0-9+\-()\s]*$/';
+
+    /**
+     * TIN / SSS / PhilHealth numbers: digits plus - and spaces. No letters.
+     */
+    private const ID_NUMBER_PATTERN = '/^[0-9\-\s]*$/';
+
+    /**
      * Columns safe to expose to the Users directory list / search results.
-     * (password and remember_token are already hidden on the model, this
-     * is just explicit so nobody has to remember that later.)
+     * (password and remember_token are never selected.)
      */
     private const LIST_COLUMNS = [
-        'id', 'staff_name', 'username', 'user_type', 'active',
+        'staff.id', 'staff.id_no', 'staff.staff_name', 'staff.contact_no',
+        'staff.address', 'staff.birthdate', 'staff.tin', 'staff.sss_no',
+        'staff.philhealth_no', 'staff.emergency_contact', 'staff.photo_path', 'staff.username',
+        'staff.user_type', 'staff.position_id', 'staff.available', 'staff.can_login', 'staff.active',
     ];
+
+    /**
+     * Staff query with the position name and user role name joined in, so
+     * the UI can show them without extra lookups.
+     */
+    private function listQuery()
+    {
+        return Staff::query()
+            ->leftJoin('positions', 'positions.id', '=', 'staff.position_id')
+            ->leftJoin('user_roles', 'user_roles.role_key', '=', 'staff.user_type')
+            ->select(array_merge(self::LIST_COLUMNS, [
+                'positions.position_name',
+                'user_roles.role_name',
+            ]));
+    }
+
+    /**
+     * One staff record in the same shape as the directory list.
+     */
+    private function present(Staff $staff)
+    {
+        return $this->listQuery()->where('staff.id', $staff->id)->first();
+    }
 
     /**
      * List staff accounts for the Users directory panel.
@@ -31,27 +70,27 @@ class StaffController extends Controller
      * GET /staff
      * GET /staff?search=term
      *
-     * Always returns at most LIST_LIMIT records. With no `search` query
-     * string it returns the first 10 staff (alphabetical by name); with
-     * one, it returns up to 10 accounts whose name or username match it.
+     * At most LIST_LIMIT records, alphabetical by name. A search matches
+     * name, ID no or username.
      */
     public function index(Request $request)
     {
         $search = trim((string) $request->query('search', ''));
 
-        $query = Staff::query();
+        $query = $this->listQuery();
 
         if ($search !== '') {
             $query->where(function ($q) use ($search) {
-                $q->where('staff_name', 'like', "%{$search}%")
-                  ->orWhere('username', 'like', "%{$search}%");
+                $q->where('staff.staff_name', 'like', "%{$search}%")
+                  ->orWhere('staff.username', 'like', "%{$search}%")
+                  ->orWhere('staff.id_no', 'like', "%{$search}%");
             });
         }
 
         $staff = $query
-            ->orderBy('staff_name')
+            ->orderBy('staff.staff_name')
             ->limit(self::LIST_LIMIT)
-            ->get(self::LIST_COLUMNS);
+            ->get();
 
         return response()->json([
             'staff' => $staff,
@@ -59,16 +98,132 @@ class StaffController extends Controller
     }
 
     /**
+     * Validation rules shared by store() and update().
+     */
+    private function rules(?Staff $staff = null): array
+    {
+        // Credentials are only required for records that can log in. An
+        // existing account that already has a password keeps it when the
+        // password box is left blank.
+        $canLogin    = request()->boolean('can_login', true);
+        $hasPassword = $staff && !empty($staff->getRawOriginal('password'));
+
+        return [
+            'id_no'             => ['required', 'string', 'max:50', Rule::unique('staff', 'id_no')->ignore($staff?->id)],
+            'staff_name'        => 'required|string|max:255',
+            'contact_no'        => ['nullable', 'string', 'max:50', 'regex:' . self::PHONE_PATTERN],
+            'address'           => 'nullable|string|max:1000',
+            'birthdate'         => 'nullable|date|before_or_equal:today',
+            'tin'               => ['nullable', 'string', 'max:50', 'regex:' . self::ID_NUMBER_PATTERN],
+            'sss_no'            => ['nullable', 'string', 'max:50', 'regex:' . self::ID_NUMBER_PATTERN],
+            'philhealth_no'     => ['nullable', 'string', 'max:50', 'regex:' . self::ID_NUMBER_PATTERN],
+            'emergency_contact' => 'nullable|string|max:255',
+            'photo_path'        => 'nullable|image|max:2048',
+            'remove_photo'      => 'sometimes|boolean',
+            'username'          => [$canLogin ? 'required' : 'nullable', 'string', 'max:255', Rule::unique('staff', 'username')->ignore($staff?->id)],
+            'password'          => [($canLogin && !$hasPassword) ? 'required' : 'nullable', 'string', 'min:6', 'confirmed'],
+            'user_type'         => ['required', 'string', $this->activeRoleRule($staff?->user_type)],
+            'position_id'       => ['nullable', 'integer', $this->activePositionRule($staff?->position_id)],
+            'available'         => 'sometimes|boolean',
+            'can_login'         => 'sometimes|boolean',
+        ];
+    }
+
+    /**
+     * Friendly messages for the number fields.
+     */
+    private function messages(): array
+    {
+        return [
+            'contact_no.regex'     => 'Contact No may only contain numbers (and + - ( ) or spaces), no letters.',
+            'tin.regex'            => 'TIN may only contain numbers (and - or spaces), no letters.',
+            'sss_no.regex'         => 'SSS No may only contain numbers (and - or spaces), no letters.',
+            'philhealth_no.regex'  => 'PhilHealth No may only contain numbers (and - or spaces), no letters.',
+        ];
+    }
+
+    /**
+     * user_type must be an Active role from user_roles. An account that
+     * already holds a role keeps it on edit even if that role has since
+     * been set Inactive (so saving other fields doesn't fail).
+     */
+    private function activeRoleRule(?string $current)
+    {
+        return function (string $attribute, $value, $fail) use ($current) {
+            if ($current !== null && strtolower((string) $value) === strtolower($current)) {
+                return;
+            }
+
+            $ok = UserRole::where('role_key', $value)->where('status', 'Active')->exists();
+
+            if (!$ok) {
+                $fail('Select an active user role.');
+            }
+        };
+    }
+
+    /**
+     * position_id must be an Active position. Same carve-out as above for
+     * the position the account already holds.
+     */
+    private function activePositionRule($current)
+    {
+        return function (string $attribute, $value, $fail) use ($current) {
+            if ($value === null || $value === '') {
+                return;
+            }
+
+            if ($current !== null && (int) $value === (int) $current) {
+                return;
+            }
+
+            if (!Position::where('id', $value)->where('status', 'Active')->exists()) {
+                $fail('Select an active position.');
+            }
+        };
+    }
+
+    /**
+     * Turn the uploaded picture (or a "remove picture" request) into the
+     * photo_path value to save, deleting the old file when it is replaced
+     * or removed. When neither happens, photo_path is left out so the
+     * current picture is kept.
+     */
+    private function applyPhoto(Request $request, array $validated, ?Staff $staff = null): array
+    {
+        unset($validated['remove_photo'], $validated['photo_path']);
+
+        if ($request->hasFile('photo_path')) {
+            $file     = $request->file('photo_path');
+            $slug     = Str::slug($validated['staff_name'] ?? 'staff', '_') ?: 'staff';
+            $filename = $slug . '.' . uniqid() . '.' . $file->extension();
+
+            $file->storeAs('staff', $filename, 'public');
+
+            // Replaced pictures don't pile up on disk
+            if ($staff && $staff->photo_path) {
+                Storage::disk('public')->delete($staff->photo_path);
+            }
+
+            $validated['photo_path'] = 'staff/' . $filename;
+        } elseif ($staff && $request->boolean('remove_photo')) {
+            if ($staff->photo_path) {
+                Storage::disk('public')->delete($staff->photo_path);
+            }
+
+            $validated['photo_path'] = null;
+        }
+
+        return $validated;
+    }
+
+    /**
      * Register a new staff account.
      */
     public function store(Request $request)
     {
-        $validated = $request->validate([
-            'staff_name' => 'required|string|max:255',
-            'username'   => 'required|string|max:255|unique:staff,username',
-            'password'   => 'required|string|min:6|confirmed',
-            'user_type'  => ['required', Rule::in(['admin', 'staff'])],
-        ]);
+        $validated = $request->validate($this->rules(), $this->messages());
+        $validated = $this->applyPhoto($request, $validated);
 
         // 'active' isn't on the registration form on purpose: new accounts
         // start enabled (the migration's default) and are flipped on/off
@@ -81,7 +236,7 @@ class StaffController extends Controller
         if ($request->wantsJson()) {
             return response()->json([
                 'message' => 'Staff account saved successfully.',
-                'staff'   => $staffMember,
+                'staff'   => $this->present($staffMember),
             ], 201);
         }
 
@@ -91,17 +246,34 @@ class StaffController extends Controller
     /**
      * Update an existing staff account.
      *
+     * A picture upload needs a multipart body, which a browser can't send
+     * with a real PUT, so the form POSTs here with a `_method=PUT` field.
+     *
      * Password is optional here — leave it blank on the form to keep the
      * account's current password.
      */
     public function update(Request $request, Staff $staff)
     {
-        $validated = $request->validate([
-            'staff_name' => 'required|string|max:255',
-            'username'   => ['required', 'string', 'max:255', Rule::unique('staff', 'username')->ignore($staff->id)],
-            'password'   => 'nullable|string|min:6|confirmed',
-            'user_type'  => ['required', Rule::in(['admin', 'staff'])],
-        ]);
+        $validated = $request->validate($this->rules($staff), $this->messages());
+
+        // Don't let an admin switch off sign-in for the account they're
+        // currently using (same idea as the disable / delete guards).
+        if (array_key_exists('can_login', $validated)
+            && !$validated['can_login']
+            && $staff->id === Auth::guard('staff')->id()) {
+            $message = 'You cannot turn off system login for your own account while logged in.';
+
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'message' => $message,
+                    'errors'  => ['can_login' => [$message]],
+                ], 422);
+            }
+
+            return redirect()->back()->withErrors(['can_login' => $message]);
+        }
+
+        $validated = $this->applyPhoto($request, $validated, $staff);
 
         // Don't overwrite the stored hash with an empty value just because
         // the admin left the password field blank while editing.
@@ -114,7 +286,7 @@ class StaffController extends Controller
         if ($request->wantsJson()) {
             return response()->json([
                 'message' => 'Staff account updated successfully.',
-                'staff'   => $staff->fresh(),
+                'staff'   => $this->present($staff),
             ]);
         }
 
@@ -152,7 +324,7 @@ class StaffController extends Controller
         if ($request->wantsJson()) {
             return response()->json([
                 'message' => $message,
-                'staff'   => $staff->fresh(),
+                'staff'   => $this->present($staff),
             ]);
         }
 
@@ -172,6 +344,10 @@ class StaffController extends Controller
             }
 
             return redirect()->back()->withErrors(['staff' => $message]);
+        }
+
+        if ($staff->photo_path) {
+            Storage::disk('public')->delete($staff->photo_path);
         }
 
         $staff->delete();

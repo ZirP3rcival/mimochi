@@ -5,6 +5,8 @@ import ClientManager from './ClientManager';
 import StaffManager from './StaffManager';
 import DashboardOverview from './DashboardOverview';
 import SalesManager from './SalesManager';
+import SettingsManager from './SettingsManager';
+import ReportsManager from './ReportsManager';
 import { usePage } from '@inertiajs/react';
 
 const MODULES = [
@@ -66,11 +68,43 @@ function Watermark() {
   );
 }
 
-export default function DashboardAdmin({ staff }) { 
+// Logged-in staff avatar: profile picture when there is one (and it loads),
+// otherwise the first letter of the name.
+function StaffAvatar({ staff, className = 'w-8 h-8 text-sm' }) {
+  const [failed, setFailed] = useState(false);
+  const src = staff?.photo_path && !failed ? `/storage/${staff.photo_path}` : null;
+
+  return (
+    <div
+      className={`rounded-full bg-gray-800 text-white overflow-hidden flex items-center justify-center font-semibold shrink-0 shadow-sm ${className}`}
+    >
+      {src ? (
+        <img
+          key={staff.photo_path}
+          src={src}
+          alt={staff?.staff_name || 'Profile'}
+          className="w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : staff?.staff_name ? (
+        staff.staff_name.charAt(0).toUpperCase()
+      ) : (
+        <User className="w-4 h-4" />
+      )}
+    </div>
+  );
+}
+
+export default function DashboardAdmin({ staff, allowedModules = null }) { 
   const [selectedId, setSelectedId] = useState('dashboard'); // Defaulting to clients module for easier local workspace access
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredId, setHoveredId] = useState(null);
-  const selectedModule = MODULES.find((m) => m.id === selectedId) || null;
+  // Only show the modules this account's user role has been granted
+  // (Settings > User Role). null = no restriction info sent: show all.
+  const visibleModules = Array.isArray(allowedModules)
+    ? MODULES.filter((m) => allowedModules.includes(m.id))
+    : MODULES;
+  const selectedModule = visibleModules.find((m) => m.id === selectedId) || null;
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
 
@@ -135,9 +169,7 @@ export default function DashboardAdmin({ staff }) {
               aria-haspopup="true"
               aria-expanded={dropdownOpen}
             >
-              <div className="w-8 h-8 rounded-full bg-gray-800 text-white flex items-center justify-center font-semibold text-sm shrink-0 shadow-sm">
-                {staff?.staff_name ? staff.staff_name.charAt(0).toUpperCase() : <User className="w-4 h-4" />}
-              </div>
+              <StaffAvatar key={staff?.photo_path || 'no-photo'} staff={staff} className="w-8 h-8 text-sm" />
               {/* FIX: same escaped-template-literal bug — the rotate-180
                   class was never actually being applied when open. */}
               <ChevronDown className={`w-4 h-4 text-neutral-500 transition-transform duration-200 ${dropdownOpen ? 'rotate-180' : ''}`} />
@@ -145,9 +177,12 @@ export default function DashboardAdmin({ staff }) {
 
             {dropdownOpen && (
               <div className="absolute right-0 mt-2 w-48 bg-white border border-neutral-200 rounded-xl shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
-                <div className="px-4 py-2 border-b border-neutral-100 xs:hidden">
-                  <p className="text-sm font-semibold text-neutral-800 truncate">{staff?.staff_name}</p>
-                  <p className="text-xs text-neutral-400 capitalize">{staff?.role || 'Admin'}</p>
+                <div className="flex items-center gap-3 px-4 py-3 border-b border-neutral-100">
+                  <StaffAvatar key={staff?.photo_path || 'no-photo-menu'} staff={staff} className="w-10 h-10 text-base" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-neutral-800 truncate">{staff?.staff_name}</p>
+                    <p className="text-xs text-neutral-400 capitalize truncate">{staff?.user_type || 'Admin'}</p>
+                  </div>
                 </div>
 
                 <Link
@@ -192,7 +227,7 @@ export default function DashboardAdmin({ staff }) {
             <div className="p-5">
               <p className="text-xs font-semibold tracking-wide text-orange-600 mb-4">SYSTEM MENU</p>
               <div className="grid grid-cols-2 gap-3">
-                {MODULES.map((mod) => {
+                {visibleModules.map((mod) => {
                   const isSelected = mod.id === selectedId;
                   const isHovered = mod.id === hoveredId;
                   const tintAlpha = isSelected ? 0.16 : isHovered ? 0.09 : 0;
@@ -215,7 +250,7 @@ export default function DashboardAdmin({ staff }) {
             </div>
           ) : (
             <div className="py-4 flex flex-col items-center gap-2">
-              {MODULES.map((mod) => {
+              {visibleModules.map((mod) => {
                 const isSelected = mod.id === selectedId;
                 const isHovered = mod.id === hoveredId;
                 return (
@@ -289,6 +324,14 @@ export default function DashboardAdmin({ staff }) {
                     staffList={usePage().props.staffList}
                     currentStaffId={staff?.id}
                   />
+                ) : selectedId === 'reports' ? (
+                  /* Daily Sales report: calendar range picker + printable
+                     sheet. Loads its own data from /reports/daily-sales. */
+                  <ReportsManager />
+                ) : selectedId === 'settings' ? (
+                  /* System settings: left icon rail + right module display
+                     area. First module is User Role maintenance. */
+                  <SettingsManager />
                 ) : (
                   <div className="flex items-center justify-center h-72 text-neutral-400 text-sm">
                     {selectedModule.label} module content goes here

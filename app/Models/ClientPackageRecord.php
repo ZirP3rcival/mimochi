@@ -19,10 +19,10 @@ class ClientPackageRecord extends Model
 
     protected $fillable = [
         'client_id', 'package_id', 'package_name', 'package_price',
-        'session_count', 'free_session_count', 'status',
+        'session_count', 'free_session_count', 'status', 'done_at',
     ];
 
-    protected $casts = ['package_price' => 'decimal:2'];
+    protected $casts = ['package_price' => 'decimal:2', 'done_at' => 'datetime'];
 
     public function client(): BelongsTo
     {

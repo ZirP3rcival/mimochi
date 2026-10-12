@@ -602,11 +602,14 @@ export default function ClientManager({ clients: initialClients = [] }) {
                 {/* ACTION BLOCK: REGISTRATION / EDIT FORM CANVAS (shared by Create and Update) */}
                 {(currentAction === 'create' || isUpdateMode) && (
                     <div className="space-y-4">
-                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center gap-2">
-                            <span>{isUpdateMode ? '✏️' : '✨'}</span>
-                            {isUpdateMode
-                                ? `Edit Client Record — ${selectedClient.first_name} ${selectedClient.last_name}`
-                                : 'Register New Client Account'}
+                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-2">
+                                <span>{isUpdateMode ? '✏️' : '✨'}</span>
+                                {isUpdateMode
+                                    ? `Edit Client Record — ${selectedClient.first_name} ${selectedClient.last_name}`
+                                    : 'Register New Client Account'}
+                            </span>
+                            <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition">Cancel</button>
                         </h3>
 
                         {formStatus && (
@@ -730,7 +733,7 @@ export default function ClientManager({ clients: initialClients = [] }) {
                             </div>
 
                             <div className="flex justify-end gap-2 pt-4 border-t border-gray-50">
-                                <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition">Cancel</button>
+                                <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition">Cancel</button>
                                 <button
                                     type="submit"
                                     disabled={submitting}
@@ -752,8 +755,9 @@ export default function ClientManager({ clients: initialClients = [] }) {
                 {/* ACTION BLOCK: MASTER PROFILE OVERVIEW OVERLAY */}
                 {currentAction === 'view' && selectedClient && (
                     <div className="space-y-4">
-                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center gap-2">
-                            <span>🔍</span> Client Master Overview
+                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-2"><span>🔍</span> Client Master Overview</span>
+                            <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition">Cancel</button>
                         </h3>
                         <div className="bg-gray-50/60 border border-gray-100 rounded-xl p-5 space-y-4">
                             <div className="flex items-center gap-4 pb-4 border-b border-gray-100">

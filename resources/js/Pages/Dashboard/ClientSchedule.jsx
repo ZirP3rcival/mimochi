@@ -168,9 +168,18 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
         <div className="w-full min-h-[calc(100vh-6rem)] bg-gray-50 flex flex-col gap-4 p-2 sm:p-4">
             <ClientProfileHeader client={client} />
 
-            <p className="px-1 text-xs text-gray-400 shrink-0">
-                Choose what this client is booking. Date, time and staff are assigned later, one by one, from the client's service record.
-            </p>
+            <div className="flex items-center justify-between gap-3 shrink-0">
+                <p className="px-1 text-xs text-gray-400">
+                    Choose what this client is booking. Date, time and staff are assigned later, one by one, from the client's service record.
+                </p>
+                <button
+                    type="button"
+                    onClick={handleCancel}
+                    disabled={saving}
+                    className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition disabled:opacity-50 whitespace-nowrap">
+                    Cancel
+                </button>
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
 
@@ -311,7 +320,7 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
                     type="button"
                     onClick={handleCancel}
                     disabled={saving}
-                    className="px-5 py-2.5 border border-gray-200 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50 transition disabled:opacity-50"
+                    className="px-5 py-2.5 bg-red-500 text-white rounded-lg text-sm font-semibold hover:bg-red-600 transition disabled:opacity-50"
                 >
                     Cancel
                 </button>

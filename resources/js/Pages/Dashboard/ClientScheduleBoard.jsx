@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Tag, Gift, Package as PackageIcon, Pencil, CheckCircle2, RotateCcw, Trash2 } from 'lucide-react';
+import { Tag, Gift, Package as PackageIcon, Pencil, CheckCircle2, RotateCcw, Trash2, Banknote } from 'lucide-react';
 
 // ── helpers ────────────────────────────────────────────────────────────
 function getXsrfToken() {
@@ -57,6 +57,7 @@ const STATUS_META = {
     pending: { label: 'Pending', className: 'bg-gray-100 text-gray-500 border-gray-200' },
     ongoing: { label: 'On-going', className: 'bg-amber-50 text-amber-700 border-amber-100' },
     done: { label: 'Done', className: 'bg-green-50 text-green-700 border-green-100' },
+    paid: { label: 'Paid', className: 'bg-sky-50 text-sky-700 border-sky-100' },
 };
 
 function StatusChip({ status }) {
@@ -67,6 +68,25 @@ function StatusChip({ status }) {
         </span>
     );
 }
+
+// Payment button, shown next to the "Done" chip only. Once paid the status
+// becomes "Paid" and this button disappears.
+function PayButton({ busy, onPay, title = 'Record payment' }) {
+    return (
+        <button
+            type="button"
+            disabled={busy}
+            title={title}
+            aria-label={title}
+            onClick={onPay}
+            className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-sky-600 hover:bg-sky-50"
+        >
+            <Banknote className="w-4 h-4" />
+        </button>
+    );
+}
+
+const confirmPay = (label) => window.confirm(`Record payment for "${label}"? It will be marked Paid and can no longer be changed.`);
 
 const inputCls = 'w-full p-2 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[rgb(240,136,176)]';
 const iconBtn = 'w-8 h-8 rounded-lg flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
@@ -149,9 +169,10 @@ function AssignmentEditor({ line, staff, busy, onSave, onCancel, isSession = fal
 }
 
 // ── one schedulable row: an item, or one item inside a bundle ──────────
-function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEditing, busy, save, onDelete }) {
+function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEditing, busy, save, onDelete, onPay }) {
     const isEditing = editing === editingKey;
     const done = line.status === 'done';
+    const isPaid = line.status === 'paid';
 
     return (
         <div className="p-3">
@@ -164,27 +185,32 @@ function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEd
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                     <StatusChip status={line.status} />
-                    <button type="button" title="Assign date, time & staff" aria-label="Assign date, time and staff" onClick={() => setEditing(isEditing ? null : editingKey)} className={`${iconBtn} hover:bg-gray-100 text-gray-500`}>
-                        <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                        type="button"
-                        disabled={busy || (!done && !line.staff_id) || (!done && !line.scheduled_date) || (!done && !line.scheduled_time)}
-                        title={done ? 'Reopen' : 'Mark done (needs date, time & staff)'}
-                        aria-label={done ? 'Reopen' : 'Mark done'}
-                        onClick={() => save(url, { done: !done })}
-                        className={`${iconBtn} ${done ? 'text-amber-600 hover:bg-amber-50' : 'text-green-600 hover:bg-green-50'}`}
-                    >
-                        {done ? <RotateCcw className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
-                    </button>
-                    {onDelete && (
-                        <button type="button" title="Delete booking" aria-label="Delete booking" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
-                            <Trash2 className="w-4 h-4" />
-                        </button>
+                    {onPay && done && <PayButton busy={busy} onPay={onPay} />}
+                    {!isPaid && (
+                        <>
+                            <button type="button" title="Assign date, time & staff" aria-label="Assign date, time and staff" onClick={() => setEditing(isEditing ? null : editingKey)} className={`${iconBtn} hover:bg-gray-100 text-gray-500`}>
+                                <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                                type="button"
+                                disabled={busy || (!done && !line.staff_id) || (!done && !line.scheduled_date) || (!done && !line.scheduled_time)}
+                                title={done ? 'Reopen' : 'Mark done (needs date, time & staff)'}
+                                aria-label={done ? 'Reopen' : 'Mark done'}
+                                onClick={() => save(url, { done: !done })}
+                                className={`${iconBtn} ${done ? 'text-amber-600 hover:bg-amber-50' : 'text-green-600 hover:bg-green-50'}`}
+                            >
+                                {done ? <RotateCcw className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                            </button>
+                            {onDelete && (
+                                <button type="button" title="Delete booking" aria-label="Delete booking" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
+                                    <Trash2 className="w-4 h-4" />
+                                </button>
+                            )}
+                        </>
                     )}
                 </div>
             </div>
-            {isEditing && (
+            {isEditing && !isPaid && (
                 <AssignmentEditor key={line.id} line={line} staff={staff} busy={busy} onCancel={() => setEditing(null)} onSave={(payload) => save(url, payload)} />
             )}
         </div>
@@ -197,11 +223,12 @@ function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEd
 // Signature) for the same columns, then Status and Remarks.
 const cell = 'border border-gray-300 px-2 py-2 text-center align-middle';
 
-function PackageCard({ record, client, staff, editing, setEditing, busy, save, onDelete, onAddSession }) {
+function PackageCard({ record, client, staff, editing, setEditing, busy, save, onDelete, onPay }) {
     const paid = record.sessions.filter((s) => !s.is_free);
     const freeBySeq = Object.fromEntries(record.sessions.filter((s) => s.is_free).map((s) => [s.sequence, s]));
     const active = record.sessions.find((s) => editing === `session-${s.id}`);
-    const doneCount = paid.filter((s) => s.status === 'done').length;
+    const doneCount = paid.filter((s) => s.status === 'done' || s.status === 'paid').length;
+    const recordPaid = record.status === 'paid';
     const clientName = [client.first_name, client.last_name].filter(Boolean).join(' ') || '—';
 
     const toggle = (s) => {
@@ -223,7 +250,7 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
         {
             label: 'Free', free: true, tone: 'bg-indigo-100 text-indigo-900',
             render: (s) => (s?.free_label
-                ? <span className="font-semibold">{s.free_label}{s.status === 'done' ? ' ✓' : ''}</span>
+                ? <span className="font-semibold">{s.free_label}{s.status === 'done' || s.status === 'paid' ? ' ✓' : ''}</span>
                 : dash),
         },
         { label: 'Date', free: true, render: dateOf },
@@ -246,9 +273,12 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
                     </span>
                     <span className="flex items-center gap-1">
                         <StatusChip status={record.status} />
-                        <button type="button" title="Delete package record" aria-label="Delete package record" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
-                            <Trash2 className="w-4 h-4" />
-                        </button>
+                        {record.status === 'done' && <PayButton busy={busy} onPay={onPay} />}
+                        {!recordPaid && (
+                            <button type="button" title="Delete package record" aria-label="Delete package record" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        )}
                     </span>
                 </div>
             </div>
@@ -293,19 +323,9 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
                     </table>
                 </div>
 
-                <div className="flex items-center justify-between gap-3">
-                    <p className="text-[11px] text-gray-400">
-                        Click any cell to assign its date, time and staff, record the signature, or add remarks. The Free rows are optional.
-                    </p>
-                    <button
-                        type="button"
-                        onClick={onAddSession}
-                        disabled={busy || paid.length >= 50}
-                        className="px-2.5 py-1 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition whitespace-nowrap disabled:opacity-40"
-                    >
-                        + Add session
-                    </button>
-                </div>
+                <p className="text-[11px] text-gray-400">
+                    Click any cell to assign its date, time and staff, record the signature, or add remarks. The Free rows are optional.
+                </p>
 
                 {active && (
                     <div>
@@ -313,27 +333,35 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
                             <h5 className="text-xs font-bold text-gray-700">
                                 {active.is_free ? `Free · ${ordinal(active.sequence)} session column` : `${ordinal(active.sequence)} session`}
                             </h5>
-                            <button
-                                type="button"
-                                disabled={busy || (active.status !== 'done' && !(active.scheduled_date && active.scheduled_time && active.staff_id))}
-                                onClick={() => save(`/clients/${client.id}/package-sessions/${active.id}`, { done: active.status !== 'done' })}
-                                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
-                                    active.status === 'done' ? 'text-amber-700 border-amber-200 hover:bg-amber-50' : 'text-green-700 border-green-200 hover:bg-green-50'
-                                }`}
-                            >
-                                {active.status === 'done' ? <><RotateCcw className="w-3.5 h-3.5" /> Reopen</> : <><CheckCircle2 className="w-3.5 h-3.5" /> Mark done</>}
-                            </button>
+                            {active.status !== 'paid' && (
+                                <button
+                                    type="button"
+                                    disabled={busy || (active.status !== 'done' && !(active.scheduled_date && active.scheduled_time && active.staff_id))}
+                                    onClick={() => save(`/clients/${client.id}/package-sessions/${active.id}`, { done: active.status !== 'done' })}
+                                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border transition disabled:opacity-40 disabled:cursor-not-allowed ${
+                                        active.status === 'done' ? 'text-amber-700 border-amber-200 hover:bg-amber-50' : 'text-green-700 border-green-200 hover:bg-green-50'
+                                    }`}
+                                >
+                                    {active.status === 'done' ? <><RotateCcw className="w-3.5 h-3.5" /> Reopen</> : <><CheckCircle2 className="w-3.5 h-3.5" /> Mark done</>}
+                                </button>
+                            )}
                         </div>
-                        <AssignmentEditor
-                            key={active.id}
-                            line={active}
-                            staff={staff}
-                            busy={busy}
-                            isSession
-                            isFree={active.is_free}
-                            onCancel={() => setEditing(null)}
-                            onSave={(payload) => save(`/clients/${client.id}/package-sessions/${active.id}`, payload)}
-                        />
+                        {active.status === 'paid' ? (
+                            <p className="text-xs text-sky-700 bg-sky-50 border border-sky-100 rounded-lg px-3 py-2 mt-2">
+                                This session has been paid and is locked.
+                            </p>
+                        ) : (
+                            <AssignmentEditor
+                                key={active.id}
+                                line={active}
+                                staff={staff}
+                                busy={busy}
+                                isSession
+                                isFree={active.is_free}
+                                onCancel={() => setEditing(null)}
+                                onSave={(payload) => save(`/clients/${client.id}/package-sessions/${active.id}`, payload)}
+                            />
+                        )}
                     </div>
                 )}
             </div>
@@ -436,7 +464,7 @@ export default function ClientScheduleBoard({ client }) {
                                 <LineRow
                                     key={row.id}
                                     title={row.item_name}
-                                    subtitle={`Item · ${peso(row.price)}${row.commission != null ? ` · Commission ${peso(row.commission)}` : ''}`}
+                                    subtitle={`Item · ${peso(row.price)}`}
                                     line={row}
                                     url={`/clients/${client.id}/schedule-items/${row.id}`}
                                     staff={staff}
@@ -446,13 +474,14 @@ export default function ClientScheduleBoard({ client }) {
                                     busy={busy}
                                     save={save}
                                     onDelete={() => remove('item', row.id, row.item_name)}
+                                    onPay={() => confirmPay(row.item_name) && run(() => api(`/clients/${client.id}/schedule-items/${row.id}`, 'PATCH', { paid: true }))}
                                 />
                             ))}
                         </div>
                     ))}
 
                     {tab === 'bundles' && (data.bundles.length === 0 ? empty : data.bundles.map((bundle) => {
-                        const doneLines = bundle.lines.filter((l) => l.status === 'done').length;
+                        const doneLines = bundle.lines.filter((l) => l.status === 'done' || l.status === 'paid').length;
                         return (
                             <div key={bundle.id} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
                                 <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50/70 border-b border-gray-100">
@@ -462,9 +491,17 @@ export default function ClientScheduleBoard({ client }) {
                                     </div>
                                     <div className="flex items-center gap-1 shrink-0">
                                         <StatusChip status={bundle.status} />
-                                        <button type="button" title="Delete bundle booking" aria-label="Delete bundle booking" onClick={() => remove('bundle', bundle.id, bundle.bundle_name)} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
+                                        {bundle.status === 'done' && (
+                                            <PayButton
+                                                busy={busy}
+                                                onPay={() => confirmPay(bundle.bundle_name) && run(() => api(`/clients/${client.id}/bundle-schedules/${bundle.id}/pay`, 'PATCH'))}
+                                            />
+                                        )}
+                                        {bundle.status !== 'paid' && (
+                                            <button type="button" title="Delete bundle booking" aria-label="Delete bundle booking" onClick={() => remove('bundle', bundle.id, bundle.bundle_name)} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
+                                                <Trash2 className="w-4 h-4" />
+                                            </button>
+                                        )}
                                     </div>
                                 </div>
                                 <div className="divide-y divide-gray-50">
@@ -472,7 +509,7 @@ export default function ClientScheduleBoard({ client }) {
                                         <LineRow
                                             key={line.id}
                                             title={line.item_name}
-                                            subtitle={`Bundle item${line.commission != null ? ` · Commission ${peso(line.commission)}` : ''}`}
+                                            subtitle="Bundle item"
                                             line={line}
                                             url={`/clients/${client.id}/bundle-schedule-lines/${line.id}`}
                                             staff={staff}
@@ -501,7 +538,7 @@ export default function ClientScheduleBoard({ client }) {
                                     busy={busy}
                                     save={save}
                                     onDelete={() => remove('package', record.id, record.package_name)}
-                                    onAddSession={() => run(() => api(`/clients/${client.id}/package-records/${record.id}/sessions`, 'POST'))}
+                                    onPay={() => confirmPay(record.package_name) && run(() => api(`/clients/${client.id}/package-records/${record.id}/pay`, 'PATCH'))}
                                 />
                             ))}
                         </div>

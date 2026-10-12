@@ -12,9 +12,9 @@ class ClientBundleSchedule extends Model
 {
     use RollsUpScheduleStatus;
 
-    protected $fillable = ['client_id', 'bundle_id', 'bundle_name', 'bundle_price', 'status'];
+    protected $fillable = ['client_id', 'bundle_id', 'bundle_name', 'bundle_price', 'status', 'done_at'];
 
-    protected $casts = ['bundle_price' => 'decimal:2'];
+    protected $casts = ['bundle_price' => 'decimal:2', 'done_at' => 'datetime'];
 
     public function client(): BelongsTo
     {

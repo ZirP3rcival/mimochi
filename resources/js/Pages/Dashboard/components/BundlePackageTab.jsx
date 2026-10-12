@@ -566,11 +566,14 @@ export default function BundlePackageTab({ kind }) {
                 {/* ACTION BLOCK: FORM CANVAS (shared by Create and Update) */}
                 {(currentAction === 'create' || isUpdateMode) && (
                     <div className="space-y-4">
-                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center gap-2">
-                            <span>{isUpdateMode ? '✏️' : '✨'}</span>
-                            {isUpdateMode
-                                ? `Edit ${cfg.singular} — ${selectedRecord[cfg.nameField]}`
-                                : `Register New ${cfg.singular}`}
+                        <h3 className="text-base font-bold text-gray-800 pb-2 border-b border-gray-100 flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-2">
+                                <span>{isUpdateMode ? '✏️' : '✨'}</span>
+                                {isUpdateMode
+                                    ? `Edit ${cfg.singular} — ${selectedRecord[cfg.nameField]}`
+                                    : `Register New ${cfg.singular}`}
+                            </span>
+                            <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition">Cancel</button>
                         </h3>
 
                         {formStatus && (
@@ -781,7 +784,7 @@ export default function BundlePackageTab({ kind }) {
                             </div>
 
                             <div className="flex justify-end gap-2 pt-4 border-t border-gray-50">
-                                <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition">Cancel</button>
+                                <button type="button" onClick={() => setCurrentAction('empty')} className="px-4 py-2 bg-red-500 text-white rounded-lg text-xs font-semibold hover:bg-red-600 transition">Cancel</button>
                                 <button
                                     type="submit"
                                     disabled={submitting}

@@ -28,10 +28,18 @@ use Illuminate\Validation\ValidationException;
  *              packages. Nothing is dated yet: every row starts "pending".
  *  2. ASSIGN - PATCH a single item, bundle line or package session to give
  *              it a date, time and staff, then mark it done. Status follows:
- *              pending -> ongoing (date+time+staff set) -> done.
+ *              pending -> ongoing (date+time+staff set) -> done -> paid.
+ *  3. PAY    - a Done item, bundle or package card can be paid. That sets
+ *              status = 'paid' and stamps done_at with the payment time.
+ *              Paid records are locked.
  */
 class ClientScheduleController extends Controller
 {
+    /**
+     * Every package card shows this many session columns (1st .. 5th).
+     */
+    private const PACKAGE_SESSION_COLUMNS = 5;
+
     /**
      * Everything booked for a client.
      *
@@ -134,7 +142,15 @@ class ClientScheduleController extends Controller
     {
         abort_unless($itemSchedule->client_id === $client->id, 404);
 
-        $this->applyAssignment($itemSchedule, $request->validate($this->assignmentRules()));
+        $validated = $request->validate($this->assignmentRules() + ['paid' => 'sometimes|boolean']);
+
+        if (! empty($validated['paid'])) {
+            $this->markPaid($itemSchedule);
+
+            return $this->updated($client);
+        }
+
+        $this->applyAssignment($itemSchedule, $validated);
 
         return $this->updated($client);
     }
@@ -150,7 +166,7 @@ class ClientScheduleController extends Controller
         abort_unless($bundle && $bundle->client_id === $client->id, 404);
 
         $this->applyAssignment($bundleLine, $request->validate($this->assignmentRules()));
-        $bundle->refreshStatus();
+        $this->rollUpStatus($bundle, $bundle->lines()->get());
 
         return $this->updated($client);
     }
@@ -180,7 +196,7 @@ class ClientScheduleController extends Controller
         }
 
         $this->applyAssignment($packageSession, $validated);
-        $record->refreshStatus();
+        $this->rollUpStatus($record, $record->sessions()->where('is_free', false)->get());
 
         return $this->updated($client);
     }
@@ -194,6 +210,10 @@ class ClientScheduleController extends Controller
     {
         abort_unless($packageRecord->client_id === $client->id, 404);
 
+        if ($packageRecord->status === 'paid') {
+            throw ValidationException::withMessages(['sessions' => 'This package has been paid and can no longer be changed.']);
+        }
+
         $next = (int) $packageRecord->sessions()->where('is_free', false)->max('sequence') + 1;
 
         if ($next > 50) {
@@ -204,7 +224,55 @@ class ClientScheduleController extends Controller
             $this->createSessionSlot($packageRecord, $next);
             $packageRecord->session_count = $next;
             $packageRecord->save();
-            $packageRecord->refreshStatus();
+            $this->rollUpStatus($packageRecord, $packageRecord->sessions()->where('is_free', false)->get());
+        });
+
+        return $this->updated($client);
+    }
+
+    /**
+     * Pay a completed bundle: the bundle and all of its lines become 'paid'.
+     * The payment time is stored in the bundle's done_at; each line keeps
+     * its own completion time.
+     *
+     * PATCH /clients/{client}/bundle-schedules/{bundleSchedule}/pay
+     */
+    public function payBundle(Client $client, ClientBundleSchedule $bundleSchedule)
+    {
+        abort_unless($bundleSchedule->client_id === $client->id, 404);
+
+        $this->assertPayable($bundleSchedule, 'bundle');
+
+        DB::transaction(function () use ($bundleSchedule) {
+            foreach ($bundleSchedule->lines()->get() as $line) {
+                $line->forceFill(['status' => 'paid'])->saveQuietly();
+            }
+
+            $bundleSchedule->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+        });
+
+        return $this->updated($client);
+    }
+
+    /**
+     * Pay a completed package card: the card and its paid sessions become
+     * 'paid'. The payment time is stored in the card's done_at. Free
+     * sessions are complimentary and are left as they are.
+     *
+     * PATCH /clients/{client}/package-records/{packageRecord}/pay
+     */
+    public function payPackage(Client $client, ClientPackageRecord $packageRecord)
+    {
+        abort_unless($packageRecord->client_id === $client->id, 404);
+
+        $this->assertPayable($packageRecord, 'package');
+
+        DB::transaction(function () use ($packageRecord) {
+            foreach ($packageRecord->sessions()->where('is_free', false)->get() as $session) {
+                $session->forceFill(['status' => 'paid'])->saveQuietly();
+            }
+
+            $packageRecord->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
         });
 
         return $this->updated($client);
@@ -218,9 +286,9 @@ class ClientScheduleController extends Controller
     public function destroy(Request $request, Client $client, string $type, int $id)
     {
         [$model, $doneCheck] = match ($type) {
-            'item'    => [ClientItemSchedule::class, fn ($m) => $m->status === 'done'],
-            'bundle'  => [ClientBundleSchedule::class, fn ($m) => $m->lines()->where('status', 'done')->exists()],
-            'package' => [ClientPackageRecord::class, fn ($m) => $m->sessions()->where('status', 'done')->exists()],
+            'item'    => [ClientItemSchedule::class, fn ($m) => in_array($m->status, ['done', 'paid'], true)],
+            'bundle'  => [ClientBundleSchedule::class, fn ($m) => $m->status === 'paid' || $m->lines()->whereIn('status', ['done', 'paid'])->exists()],
+            'package' => [ClientPackageRecord::class, fn ($m) => $m->status === 'paid' || $m->sessions()->whereIn('status', ['done', 'paid'])->exists()],
         };
 
         $record = $model::where('client_id', $client->id)->findOrFail($id);
@@ -278,7 +346,7 @@ class ClientScheduleController extends Controller
 
     private function bookPackage(Client $client, Package $package): void
     {
-        $paid = max(1, (int) $package->session_count);
+        $paid = self::PACKAGE_SESSION_COLUMNS;
 
         $record = ClientPackageRecord::create([
             'client_id'     => $client->id,
@@ -329,6 +397,13 @@ class ClientScheduleController extends Controller
      */
     private function applyAssignment(Model $row, array $validated): void
     {
+        // Paid records are final: no reassigning, reopening or editing.
+        if ($row->status === 'paid') {
+            throw ValidationException::withMessages([
+                'paid' => 'This service has already been paid and can no longer be changed.',
+            ]);
+        }
+
         foreach (['scheduled_date', 'scheduled_time', 'staff_id', 'remarks'] as $field) {
             if (array_key_exists($field, $validated)) {
                 $row->{$field} = $validated[$field];
@@ -348,6 +423,56 @@ class ClientScheduleController extends Controller
         $row->save();
     }
 
+    /**
+     * Payment is only possible once the record is Done, and only once.
+     */
+    private function assertPayable(Model $record, string $label): void
+    {
+        if ($record->status === 'paid') {
+            throw ValidationException::withMessages(['paid' => "This {$label} has already been paid."]);
+        }
+
+        if ($record->status !== 'done') {
+            throw ValidationException::withMessages(['paid' => "Only a completed (Done) {$label} can be paid."]);
+        }
+    }
+
+    /**
+     * Pay a single item: status becomes 'paid' and done_at is set to the
+     * payment date and time. Events are skipped so the model's progress
+     * hook can't turn 'paid' back into pending / ongoing / done.
+     */
+    private function markPaid(Model $row): void
+    {
+        $this->assertPayable($row, 'service');
+
+        $row->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+    }
+
+    /**
+     * Parent status from its rows. Paid counts as finished work:
+     * all paid -> paid, all done/paid -> done, any started -> ongoing.
+     * A parent that is already paid stays paid.
+     */
+    private function rollUpStatus(Model $parent, $rows): void
+    {
+        if ($parent->status === 'paid') {
+            return;
+        }
+
+        $statuses = $rows->pluck('status');
+
+        $status = match (true) {
+            $statuses->isEmpty()                                              => 'pending',
+            $statuses->every(fn ($s) => $s === 'paid')                        => 'paid',
+            $statuses->every(fn ($s) => in_array($s, ['done', 'paid'], true)) => 'done',
+            $statuses->contains(fn ($s) => $s !== 'pending')                  => 'ongoing',
+            default                                                           => 'pending',
+        };
+
+        $parent->forceFill(['status' => $status])->saveQuietly();
+    }
+
     private function updated(Client $client)
     {
         return response()->json([
@@ -362,15 +487,38 @@ class ClientScheduleController extends Controller
 
     private function bookings(Client $client): array
     {
-        // Package cards booked before every session had a free slot get the
-        // missing ones now, so each 1st..Nth column shows its Free rows.
+        // Make sure every open package card has its 1st..5th session columns,
+        // each with its optional Free slot. Cards booked earlier (with fewer
+        // columns, or without free slots) are completed here. Paid cards are
+        // locked and left alone.
         ClientPackageRecord::with('sessions')->where('client_id', $client->id)->get()->each(function ($record) {
+            if ($record->status === 'paid') {
+                return;
+            }
+
+            $paidSequences = $record->sessions->where('is_free', false)->pluck('sequence');
+            $grew = false;
+
+            for ($n = 1; $n <= self::PACKAGE_SESSION_COLUMNS; $n++) {
+                if (! $paidSequences->contains($n)) {
+                    $record->sessions()->create(['sequence' => $n, 'is_free' => false]);
+                    $grew = true;
+                }
+            }
+
+            $record->load('sessions');
             $freeSequences = $record->sessions->where('is_free', true)->pluck('sequence');
 
             foreach ($record->sessions->where('is_free', false)->pluck('sequence') as $sequence) {
                 if (! $freeSequences->contains($sequence)) {
                     $record->sessions()->create(['sequence' => $sequence, 'is_free' => true]);
                 }
+            }
+
+            if ($grew) {
+                $paidRows = $record->sessions()->where('is_free', false)->get();
+                $record->forceFill(['session_count' => $paidRows->count()])->saveQuietly();
+                $this->rollUpStatus($record, $paidRows);
             }
         });
 

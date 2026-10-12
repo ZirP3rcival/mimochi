@@ -22,15 +22,25 @@ export default function ClientRecord({ client, onClose, onBookServices }) {
                             Items, bundles and package cards booked for this client. Assign date, time and staff, then mark each one done.
                         </p>
                     </div>
-                    {onBookServices && (
+                    <div className="flex items-center gap-2 shrink-0">
+                        {onBookServices && (
+                            <button
+                                type="button"
+                                onClick={() => onBookServices(client)}
+                                className="bg-[rgb(240,136,176)] hover:bg-[rgb(225,120,160)] text-white font-semibold text-sm px-3 py-2 rounded-lg flex items-center gap-2 transition shadow-sm whitespace-nowrap"
+                            >
+                                <Plus className="w-4 h-4" /> Book Services
+                            </button>
+                        )}
                         <button
                             type="button"
-                            onClick={() => onBookServices(client)}
-                            className="bg-[rgb(240,136,176)] hover:bg-[rgb(225,120,160)] text-white font-semibold text-sm px-3 py-2 rounded-lg flex items-center gap-2 transition shadow-sm whitespace-nowrap"
+                            onClick={() => onClose && onClose()}
+                            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50 transition whitespace-nowrap"
                         >
-                            <Plus className="w-4 h-4" /> Book Services
+                            <ArrowLeft className="w-4 h-4" />
+                            Back to Clients
                         </button>
-                    )}
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-3 custom-scrollbar">

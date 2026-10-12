@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Hash;
@@ -20,11 +21,22 @@ class Staff extends Authenticatable
      * The attributes that are mass assignable.
      */
     protected $fillable = [
+        'id_no',
         'staff_name',
+        'contact_no',
+        'address',
+        'birthdate',
+        'tin',
+        'sss_no',
+        'philhealth_no',
+        'emergency_contact',
+        'photo_path',    // profile picture (public disk, e.g. staff/xxx.jpg)
         'username',
         'password',
-        'user_type',
+        'user_type',     // role_key of a user_roles row (login + module access)
+        'position_id',   // positions.id (job title only, not access)
         'available',
+        'can_login',     // may this record sign in to the system
         'active',
     ];
 
@@ -40,7 +52,10 @@ class Staff extends Authenticatable
      * Attribute casting.
      */
     protected $casts = [
-        'active' => 'boolean',
+        'birthdate' => 'date:Y-m-d',
+        'available' => 'boolean',
+        'can_login' => 'boolean',
+        'active'    => 'boolean',
     ];
 
     /**
@@ -58,11 +73,27 @@ class Staff extends Authenticatable
     }
 
     /**
+     * Job position (positions table).
+     */
+    public function position(): BelongsTo
+    {
+        return $this->belongsTo(Position::class, 'position_id');
+    }
+
+    /**
+     * User role (user_roles table), linked through user_type = role_key.
+     */
+    public function userRole(): BelongsTo
+    {
+        return $this->belongsTo(UserRole::class, 'user_type', 'role_key');
+    }
+
+    /**
      * Convenience helper: is this account an admin account?
      */
     public function isAdmin(): bool
     {
-        return $this->user_type === 'admin';
+        return strtolower((string) $this->user_type) === 'admin';
     }
 
     /**
