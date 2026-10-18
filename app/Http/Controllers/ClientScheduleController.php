@@ -10,7 +10,9 @@ use App\Models\ClientBundleScheduleItem;
 use App\Models\ClientItemSchedule;
 use App\Models\ClientPackageRecord;
 use App\Models\ClientPackageSession;
+use App\Models\ClientProductSchedule;
 use App\Models\Package;
+use App\Models\Product;
 use App\Models\SaleItem;
 use App\Models\Staff;
 use Illuminate\Database\Eloquent\Model;
@@ -32,13 +34,17 @@ use Illuminate\Validation\ValidationException;
  *  3. PAY    - a Done item, bundle or package card can be paid. That sets
  *              status = 'paid' and stamps done_at with the payment time.
  *              Paid records are locked.
+ *
+ * Products skip phase 2 entirely: no date, time, staff or done status.
+ * A product is just a quantity that can be paid at any time.
  */
 class ClientScheduleController extends Controller
 {
     /**
-     * Every package card shows this many session columns (1st .. 5th).
+     * Upper limit of session columns on one package card (matches the
+     * package catalog form and addPackageSession()).
      */
-    private const PACKAGE_SESSION_COLUMNS = 5;
+    private const MAX_PACKAGE_SESSIONS = 5;
 
     /**
      * Everything booked for a client.
@@ -83,8 +89,9 @@ class ClientScheduleController extends Controller
     {
         $validated = $request->validate([
             'items'        => 'required|array|min:1',
-            'items.*.type' => 'required|string|in:item,bundle,package',
+            'items.*.type' => 'required|string|in:item,bundle,package,product',
             'items.*.id'   => 'required|integer',
+            'items.*.quantity' => 'nullable|integer|min:1|max:999',
         ]);
 
         // Resolve every selection first so a stale or deactivated record
@@ -96,6 +103,7 @@ class ClientScheduleController extends Controller
                 'item'    => SaleItem::find($entry['id']),
                 'bundle'  => Bundle::with('items')->find($entry['id']),
                 'package' => Package::find($entry['id']),
+                'product' => Product::find($entry['id']),
             };
 
             if (! $record) {
@@ -110,15 +118,16 @@ class ClientScheduleController extends Controller
                 ]);
             }
 
-            $resolved[] = [$entry['type'], $record];
+            $resolved[] = [$entry['type'], $record, max(1, (int) ($entry['quantity'] ?? 1))];
         }
 
         DB::transaction(function () use ($client, $resolved) {
-            foreach ($resolved as [$type, $record]) {
+            foreach ($resolved as [$type, $record, $quantity]) {
                 match ($type) {
                     'item'    => $this->bookItem($client, $record),
                     'bundle'  => $this->bookBundle($client, $record),
                     'package' => $this->bookPackage($client, $record),
+                    'product' => $this->bookProduct($client, $record, $quantity),
                 };
             }
         });
@@ -151,6 +160,44 @@ class ClientScheduleController extends Controller
         }
 
         $this->applyAssignment($itemSchedule, $validated);
+
+        return $this->updated($client);
+    }
+
+    /**
+     * Change the quantity of, or pay, a booked product. Products have no
+     * scheduling: no date, time, staff or done step.
+     *
+     * PATCH /clients/{client}/schedule-products/{productSchedule}
+     * body: { quantity?: 1-999, paid?: true }
+     */
+    public function updateProduct(Request $request, Client $client, ClientProductSchedule $productSchedule)
+    {
+        abort_unless($productSchedule->client_id === $client->id, 404);
+
+        $validated = $request->validate([
+            'paid'     => 'sometimes|boolean',
+            'quantity' => 'sometimes|integer|min:1|max:999',
+        ]);
+
+        // A paid product (and its total) is final.
+        if ($productSchedule->status === 'paid') {
+            throw ValidationException::withMessages([
+                'paid' => 'This product has already been paid and can no longer be changed.',
+            ]);
+        }
+
+        if (! empty($validated['paid'])) {
+            // Events are skipped so the progress hook can't undo 'paid'.
+            $productSchedule->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+
+            return $this->updated($client);
+        }
+
+        if (array_key_exists('quantity', $validated)) {
+            $productSchedule->quantity = $validated['quantity'];
+            $productSchedule->save();
+        }
 
         return $this->updated($client);
     }
@@ -216,8 +263,8 @@ class ClientScheduleController extends Controller
 
         $next = (int) $packageRecord->sessions()->where('is_free', false)->max('sequence') + 1;
 
-        if ($next > 50) {
-            throw ValidationException::withMessages(['sessions' => 'A package card can have at most 50 sessions.']);
+        if ($next > self::MAX_PACKAGE_SESSIONS) {
+            throw ValidationException::withMessages(['sessions' => 'A package card can have at most ' . self::MAX_PACKAGE_SESSIONS . ' sessions.']);
         }
 
         DB::transaction(function () use ($packageRecord, $next) {
@@ -287,6 +334,7 @@ class ClientScheduleController extends Controller
     {
         [$model, $doneCheck] = match ($type) {
             'item'    => [ClientItemSchedule::class, fn ($m) => in_array($m->status, ['done', 'paid'], true)],
+            'product' => [ClientProductSchedule::class, fn ($m) => in_array($m->status, ['done', 'paid'], true)],
             'bundle'  => [ClientBundleSchedule::class, fn ($m) => $m->status === 'paid' || $m->lines()->whereIn('status', ['done', 'paid'])->exists()],
             'package' => [ClientPackageRecord::class, fn ($m) => $m->status === 'paid' || $m->sessions()->whereIn('status', ['done', 'paid'])->exists()],
         };
@@ -322,6 +370,17 @@ class ClientScheduleController extends Controller
         ]);
     }
 
+    private function bookProduct(Client $client, Product $product, int $quantity = 1): void
+    {
+        ClientProductSchedule::create([
+            'client_id'    => $client->id,
+            'product_id'   => $product->id,
+            'product_name' => $product->product_name,
+            'price'        => $product->price,
+            'quantity'     => $quantity,
+        ]);
+    }
+
     private function bookBundle(Client $client, Bundle $bundle): void
     {
         $schedule = ClientBundleSchedule::create([
@@ -346,7 +405,9 @@ class ClientScheduleController extends Controller
 
     private function bookPackage(Client $client, Package $package): void
     {
-        $paid = self::PACKAGE_SESSION_COLUMNS;
+        // Session columns come from the package's own session_count (set in
+        // the Packages catalog), not a fixed number.
+        $paid = $this->packageSessionTarget($package->session_count);
 
         $record = ClientPackageRecord::create([
             'client_id'     => $client->id,
@@ -487,35 +548,46 @@ class ClientScheduleController extends Controller
 
     private function bookings(Client $client): array
     {
-        // Make sure every open package card has its 1st..5th session columns,
-        // each with its optional Free slot. Cards booked earlier (with fewer
-        // columns, or without free slots) are completed here. Paid cards are
-        // locked and left alone.
-        ClientPackageRecord::with('sessions')->where('client_id', $client->id)->get()->each(function ($record) {
+        // Keep every open package card's session columns in line with the
+        // package's session_count in the database. Missing columns (and
+        // their optional Free slots) are added; surplus columns are removed
+        // only while completely blank, so nothing already scheduled, signed
+        // or annotated is ever lost. Paid cards are locked and left alone.
+        ClientPackageRecord::with(['sessions', 'package'])->where('client_id', $client->id)->get()->each(function ($record) {
             if ($record->status === 'paid') {
                 return;
             }
 
-            $paidSequences = $record->sessions->where('is_free', false)->pluck('sequence');
-            $grew = false;
+            $target = $this->packageSessionTarget($record->package?->session_count ?? $record->session_count);
+            $changed = false;
 
-            for ($n = 1; $n <= self::PACKAGE_SESSION_COLUMNS; $n++) {
+            // 1) add missing paid columns
+            $paidSequences = $record->sessions->where('is_free', false)->pluck('sequence');
+            for ($n = 1; $n <= $target; $n++) {
                 if (! $paidSequences->contains($n)) {
                     $record->sessions()->create(['sequence' => $n, 'is_free' => false]);
-                    $grew = true;
+                    $changed = true;
                 }
             }
 
+            // 2) remove surplus columns that are still completely blank
+            foreach ($record->sessions->where('sequence', '>', $target)->groupBy('sequence') as $rows) {
+                if ($rows->every(fn ($row) => $this->sessionIsBlank($row))) {
+                    $rows->each->delete();
+                    $changed = true;
+                }
+            }
+
+            // 3) every remaining paid column gets its optional Free slot
             $record->load('sessions');
             $freeSequences = $record->sessions->where('is_free', true)->pluck('sequence');
-
             foreach ($record->sessions->where('is_free', false)->pluck('sequence') as $sequence) {
                 if (! $freeSequences->contains($sequence)) {
                     $record->sessions()->create(['sequence' => $sequence, 'is_free' => true]);
                 }
             }
 
-            if ($grew) {
+            if ($changed) {
                 $paidRows = $record->sessions()->where('is_free', false)->get();
                 $record->forceFill(['session_count' => $paidRows->count()])->saveQuietly();
                 $this->rollUpStatus($record, $paidRows);
@@ -532,6 +604,10 @@ class ClientScheduleController extends Controller
                 ->orderByDesc('id')
                 ->get(),
 
+            'products' => ClientProductSchedule::where('client_id', $client->id)
+                ->orderByDesc('id')
+                ->get(),
+
             'bundles' => ClientBundleSchedule::with(['lines.staff' => $staff])
                 ->where('client_id', $client->id)
                 ->orderByDesc('id')
@@ -544,12 +620,31 @@ class ClientScheduleController extends Controller
         ];
     }
 
+    /** Session columns for a card: the package's session_count, kept within 1..MAX. */
+    private function packageSessionTarget($count): int
+    {
+        return max(1, min(self::MAX_PACKAGE_SESSIONS, (int) $count));
+    }
+
+    /** True when nothing has been entered on this session cell yet. */
+    private function sessionIsBlank(ClientPackageSession $session): bool
+    {
+        return $session->status === 'pending'
+            && ! $session->scheduled_date
+            && ! $session->scheduled_time
+            && ! $session->staff_id
+            && ! $session->signed_at
+            && ! $session->remarks
+            && ! $session->free_label;
+    }
+
     private function recordLabel(string $type, $record): string
     {
         return match ($type) {
             'item'    => $record->itemname,
             'bundle'  => $record->bundle_name,
             'package' => $record->package_name,
+            'product' => $record->product_name,
         };
     }
 }

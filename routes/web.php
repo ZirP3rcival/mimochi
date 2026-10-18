@@ -3,12 +3,14 @@
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\ClientController;
+use App\Http\Controllers\DtrController;
 use App\Http\Controllers\ClientScheduleController;
 use App\Http\Controllers\StaffController;
 use App\Http\Controllers\SaleItemController;
 use App\Http\Controllers\BundleController;
 use App\Http\Controllers\PackageController;
 use App\Http\Controllers\PositionController;
+use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\UserRoleController;
 use App\Models\UserRole;
@@ -26,6 +28,17 @@ Route::get('/', function () {
 Route::middleware('guest:staff')->group(function () {
     Route::get('/login', [LoginController::class, 'create'])->name('login');
     Route::post('/login', [LoginController::class, 'store']);
+});
+
+
+// --- Daily Time Record kiosk (public: staff punch in/out without logging in) ---
+// Timestamps are always taken from the server clock. Throttled to limit abuse.
+Route::prefix('dtr')->middleware('throttle:60,1')->group(function () {
+    Route::get('/time', [DtrController::class, 'time'])->name('dtr.time');
+    Route::get('/staff', [DtrController::class, 'staff'])->name('dtr.staff');
+    Route::get('/status', [DtrController::class, 'status'])->name('dtr.status');
+    Route::post('/time-in', [DtrController::class, 'timeIn'])->name('dtr.time_in');
+    Route::post('/time-out', [DtrController::class, 'timeOut'])->name('dtr.time_out');
 });
 
 // --- Logout ---
@@ -68,10 +81,11 @@ Route::middleware(['auth:staff', 'module:clients'])->group(function () {
     Route::get('/clients/{client}/schedules', [ClientScheduleController::class, 'index'])->name('clients.schedules.index');
     Route::post('/clients/{client}/schedules', [ClientScheduleController::class, 'store'])->name('clients.schedules.store');
     Route::delete('/clients/{client}/schedules/{type}/{id}', [ClientScheduleController::class, 'destroy'])
-        ->whereIn('type', ['item', 'bundle', 'package'])->whereNumber('id')->name('clients.schedules.destroy');
+        ->whereIn('type', ['item', 'bundle', 'package', 'product'])->whereNumber('id')->name('clients.schedules.destroy');
 
     Route::get('/schedule-staff', [ClientScheduleController::class, 'staffOptions'])->name('schedules.staff');
     Route::patch('/clients/{client}/schedule-items/{itemSchedule}', [ClientScheduleController::class, 'updateItem'])->name('clients.schedule_items.update');
+    Route::patch('/clients/{client}/schedule-products/{productSchedule}', [ClientScheduleController::class, 'updateProduct'])->name('clients.schedule_products.update');
     Route::patch('/clients/{client}/bundle-schedule-lines/{bundleLine}', [ClientScheduleController::class, 'updateBundleLine'])->name('clients.bundle_lines.update');
     Route::patch('/clients/{client}/bundle-schedules/{bundleSchedule}/pay', [ClientScheduleController::class, 'payBundle'])->name('clients.bundle_schedules.pay');
     Route::patch('/clients/{client}/package-records/{packageRecord}/pay', [ClientScheduleController::class, 'payPackage'])->name('clients.package_records.pay');
@@ -126,6 +140,13 @@ Route::middleware(['auth:staff', 'module:sales'])->group(function () {
     Route::put('/packages/{package}', [PackageController::class, 'update'])->name('packages.update');
     Route::patch('/packages/{package}/toggle-status', [PackageController::class, 'toggleStatus'])->name('packages.toggle_status');
     Route::delete('/packages/{package}', [PackageController::class, 'destroy'])->name('packages.destroy');
+
+    // Products: same list + form pattern as the sale item catalog.
+    Route::get('/products', [ProductController::class, 'index'])->name('products.index');
+    Route::post('/products', [ProductController::class, 'store'])->name('products.store');
+    Route::put('/products/{product}', [ProductController::class, 'update'])->name('products.update');
+    Route::patch('/products/{product}/toggle-status', [ProductController::class, 'toggleStatus'])->name('products.toggle_status');
+    Route::delete('/products/{product}', [ProductController::class, 'destroy'])->name('products.destroy');
 });
 
 // --- Reports module (DAILY SALES report, expenses, daily salary rates) ---

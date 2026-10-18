@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import ItemsTab from './components/ItemsTab';
 import BundlePackageTab from './components/BundlePackageTab';
+import ProductsTab from './components/ProductsTab';
 
 const TABS = [
     { key: 'items', label: 'Items', icon: '🏷️' },
     { key: 'bundles', label: 'Bundles', icon: '📦' },
     { key: 'packages', label: 'Packages', icon: '🎁' },
+    { key: 'products', label: 'Products', icon: '🧴' },
 ];
 
 export default function SalesManager({ saleItems: initialSaleItems = [] }) {
@@ -35,6 +37,7 @@ export default function SalesManager({ saleItems: initialSaleItems = [] }) {
             {activeTab === 'items' && <ItemsTab initialSaleItems={initialSaleItems} />}
             {activeTab === 'bundles' && <BundlePackageTab kind="bundle" />}
             {activeTab === 'packages' && <BundlePackageTab kind="package" />}
+            {activeTab === 'products' && <ProductsTab />}
         </div>
     );
 }

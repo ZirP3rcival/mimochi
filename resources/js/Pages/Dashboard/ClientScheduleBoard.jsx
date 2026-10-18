@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Tag, Gift, Package as PackageIcon, Pencil, CheckCircle2, RotateCcw, Trash2, Banknote } from 'lucide-react';
+import { Tag, Gift, Package as PackageIcon, ShoppingBag, Pencil, CheckCircle2, RotateCcw, Trash2, Banknote, Minus, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 
 // ── helpers ────────────────────────────────────────────────────────────
 function getXsrfToken() {
@@ -27,6 +27,9 @@ async function api(url, method, body) {
 }
 
 const peso = (v) => `₱${Number(v || 0).toFixed(2)}`;
+
+// Product quantity is a whole number from 1 to 999.
+const normalizeQuantity = (v) => Math.min(999, Math.max(1, parseInt(v, 10) || 1));
 
 const ordinal = (n) => {
     const s = ['th', 'st', 'nd', 'rd'];
@@ -169,13 +172,13 @@ function AssignmentEditor({ line, staff, busy, onSave, onCancel, isSession = fal
 }
 
 // ── one schedulable row: an item, or one item inside a bundle ──────────
-function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEditing, busy, save, onDelete, onPay }) {
+function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEditing, busy, save, onDelete, selected, onToggleSelect, color }) {
     const isEditing = editing === editingKey;
     const done = line.status === 'done';
     const isPaid = line.status === 'paid';
 
     return (
-        <div className="p-3">
+        <div className={`p-3 ${color ? `rounded-xl border border-l-4 ${color.border} ${color.accent} ${color.head}` : ''}`}>
             <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                     <h5 className="text-sm font-semibold text-gray-800 truncate">{title}</h5>
@@ -185,7 +188,6 @@ function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEd
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                     <StatusChip status={line.status} />
-                    {onPay && done && <PayButton busy={busy} onPay={onPay} />}
                     {!isPaid && (
                         <>
                             <button type="button" title="Assign date, time & staff" aria-label="Assign date, time and staff" onClick={() => setEditing(isEditing ? null : editingKey)} className={`${iconBtn} hover:bg-gray-100 text-gray-500`}>
@@ -201,12 +203,15 @@ function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEd
                             >
                                 {done ? <RotateCcw className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
                             </button>
-                            {onDelete && (
+                            {onDelete && !done && (
                                 <button type="button" title="Delete booking" aria-label="Delete booking" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
                                     <Trash2 className="w-4 h-4" />
                                 </button>
                             )}
                         </>
+                    )}
+                    {done && onToggleSelect && (
+                        <SelectBox checked={Boolean(selected)} onChange={onToggleSelect} label={`Select ${title} for payment`} />
                     )}
                 </div>
             </div>
@@ -217,13 +222,65 @@ function LineRow({ title, subtitle, line, url, staff, editingKey, editing, setEd
     );
 }
 
+// Tick box that adds a record to the Payment list.
+function SelectBox({ checked, onChange, label }) {
+    return (
+        <label className="w-8 h-8 flex items-center justify-center cursor-pointer" title="Select for payment">
+            <input type="checkbox" checked={checked} onChange={onChange} aria-label={label} className="w-4 h-4 accent-green-600 cursor-pointer" />
+        </label>
+    );
+}
+
+// ── one booked product ─────────────────────────────────────────────────
+// No scheduling, status, pencil or done button: just quantity, delete and
+// the payment checkbox (last). Once paid it only shows a Paid chip.
+function ProductRow({ row, busy, onQuantity, onDelete, selected, onToggleSelect, color }) {
+    const qty = normalizeQuantity(row.quantity);
+    const total = row.total ?? Number(row.price || 0) * qty;
+    const isPaid = row.status === 'paid';
+
+    return (
+        <div className={`p-3 flex items-center justify-between gap-3 ${color ? `rounded-xl border border-l-4 ${color.border} ${color.accent} ${color.head}` : ''}`}>
+            <div className="min-w-0">
+                <h5 className="text-sm font-semibold text-gray-800 truncate">{row.product_name}</h5>
+                <p className="text-xs text-gray-500 truncate mt-0.5">
+                    Product · {peso(row.price)} × {qty} = <span className="font-semibold text-gray-700">{peso(total)}</span>
+                </p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+                {isPaid ? (
+                    <StatusChip status="paid" />
+                ) : (
+                    <>
+                        <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden mr-1">
+                            <button type="button" disabled={busy || qty <= 1} onClick={() => onQuantity(qty - 1)} aria-label={`Decrease quantity of ${row.product_name}`} className="w-7 h-8 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                                <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="w-9 text-center text-sm font-semibold text-gray-700">{qty}</span>
+                            <button type="button" disabled={busy || qty >= 999} onClick={() => onQuantity(qty + 1)} aria-label={`Increase quantity of ${row.product_name}`} className="w-7 h-8 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">
+                                <Plus className="w-3.5 h-3.5" />
+                            </button>
+                        </div>
+                        {row.status !== 'done' && (
+                            <button type="button" title="Delete product" aria-label="Delete product" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        )}
+                        <SelectBox checked={Boolean(selected)} onChange={onToggleSelect} label={`Select ${row.product_name} for payment`} />
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ── package card (mirrors the paper card) ─────────────────────────────
 // One table: a column per session (1st, 2nd ...). Under the numbered
 // session rows sit the optional Free rows (Free, Date, Time, Staff,
 // Signature) for the same columns, then Status and Remarks.
 const cell = 'border border-gray-300 px-2 py-2 text-center align-middle';
 
-function PackageCard({ record, client, staff, editing, setEditing, busy, save, onDelete, onPay }) {
+function PackageCard({ record, client, staff, editing, setEditing, busy, save, onDelete, onPay, open, onToggle, color = CARD_COLORS[0] }) {
     const paid = record.sessions.filter((s) => !s.is_free);
     const freeBySeq = Object.fromEntries(record.sessions.filter((s) => s.is_free).map((s) => [s.sequence, s]));
     const active = record.sessions.find((s) => editing === `session-${s.id}`);
@@ -262,19 +319,28 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
     ];
 
     return (
-        <div className="border border-gray-200 rounded-xl overflow-hidden bg-white">
+        <div className={`border ${color.border} rounded-xl overflow-hidden bg-white`}>
             <div className="grid grid-cols-[6rem_1fr] text-sm">
-                <div className="bg-pink-100 px-3 py-2 font-bold text-pink-900 border-b border-white">Name</div>
+                <div className={`${color.label} px-3 py-2 font-bold border-b border-white`}>Name</div>
                 <div className="px-3 py-2 border-b border-gray-100">{clientName}</div>
-                <div className="bg-pink-100 px-3 py-2 font-bold text-pink-900">Package</div>
+                <div className={`${color.label} px-3 py-2 font-bold`}>Package</div>
                 <div className="px-3 py-2 flex items-center justify-between gap-2">
-                    <span className="font-semibold text-gray-800">
-                        {record.package_name} <span className="text-xs font-normal text-gray-400">· {peso(record.package_price)} · {doneCount}/{paid.length} done</span>
-                    </span>
+                    <button
+                        type="button"
+                        onClick={onToggle}
+                        aria-expanded={open}
+                        title={open ? 'Collapse package card' : 'Expand package card'}
+                        className="flex items-center gap-1.5 min-w-0 text-left font-semibold text-gray-800"
+                    >
+                        {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+                        <span className="truncate">
+                            {record.package_name} <span className="text-xs font-normal text-gray-400">· {peso(record.package_price)} · {doneCount}/{paid.length} done</span>
+                        </span>
+                    </button>
                     <span className="flex items-center gap-1">
                         <StatusChip status={record.status} />
                         {record.status === 'done' && <PayButton busy={busy} onPay={onPay} />}
-                        {!recordPaid && (
+                        {!recordPaid && record.status !== 'done' && (
                             <button type="button" title="Delete package record" aria-label="Delete package record" onClick={onDelete} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
                                 <Trash2 className="w-4 h-4" />
                             </button>
@@ -283,19 +349,37 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
                 </div>
             </div>
 
+            {open && (
             <div className="p-3 space-y-3">
                 <div className="overflow-x-auto">
                     <table className="w-full border-collapse text-xs" style={{ minWidth: 110 + paid.length * 120 }}>
                         <thead>
                             <tr>
-                                <th className={`${cell} w-28 font-bold bg-pink-100 text-pink-900`}>Session</th>
+                                <th className={`${cell} w-28 font-bold ${color.label}`}>Session</th>
                                 {paid.map((s) => (
                                     <th
                                         key={s.id}
                                         onClick={() => toggle(s)}
                                         className={`${cell} font-bold cursor-pointer hover:bg-pink-50 ${editing === `session-${s.id}` ? 'bg-pink-50 ring-2 ring-inset ring-[rgb(240,136,176)]' : 'bg-white'}`}
                                     >
-                                        {ordinal(s.sequence)}
+                                        <div className="relative flex items-center justify-center">
+                                            <span>{ordinal(s.sequence)}</span>
+                                            {s.status !== 'paid' && (
+                                                <button
+                                                    type="button"
+                                                    disabled={busy || (s.status !== 'done' && !(s.scheduled_date && s.scheduled_time && s.staff_id))}
+                                                    title={s.status === 'done' ? 'Reopen' : 'Mark done (needs date, time & staff)'}
+                                                    aria-label={`${s.status === 'done' ? 'Reopen' : 'Mark done'} ${ordinal(s.sequence)} session`}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        save(`/clients/${client.id}/package-sessions/${s.id}`, { done: s.status !== 'done' });
+                                                    }}
+                                                    className={`${iconBtn} absolute right-0 top-1/2 -translate-y-1/2 disabled:opacity-40 disabled:cursor-not-allowed ${s.status === 'done' ? 'text-amber-600 hover:bg-amber-50' : 'text-green-600 hover:bg-green-50'}`}
+                                                >
+                                                    {s.status === 'done' ? <RotateCcw className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />}
+                                                </button>
+                                            )}
+                                        </div>
                                     </th>
                                 ))}
                             </tr>
@@ -365,6 +449,93 @@ function PackageCard({ record, client, staff, editing, setEditing, busy, save, o
                     </div>
                 )}
             </div>
+            )}
+        </div>
+    );
+}
+
+// ── list helpers: colours, done-last ordering, paging ───────────────────
+const PAGE_SIZE = 5;
+
+// Static class names (Tailwind can't see dynamically built ones).
+const CARD_COLORS = [
+    { border: 'border-pink-300',    accent: 'border-l-pink-400',    head: 'bg-pink-50',    label: 'bg-pink-100 text-pink-900' },
+    { border: 'border-orange-300',  accent: 'border-l-orange-400',  head: 'bg-orange-50',  label: 'bg-orange-100 text-orange-900' },
+    { border: 'border-emerald-300', accent: 'border-l-emerald-400', head: 'bg-emerald-50', label: 'bg-emerald-100 text-emerald-900' },
+    { border: 'border-sky-300',     accent: 'border-l-sky-400',     head: 'bg-sky-50',     label: 'bg-sky-100 text-sky-900' },
+    { border: 'border-violet-300',  accent: 'border-l-violet-400',  head: 'bg-violet-50',  label: 'bg-violet-100 text-violet-900' },
+    { border: 'border-teal-300',    accent: 'border-l-teal-400',    head: 'bg-teal-50',    label: 'bg-teal-100 text-teal-900' },
+    { border: 'border-fuchsia-300', accent: 'border-l-fuchsia-400', head: 'bg-fuchsia-50', label: 'bg-fuchsia-100 text-fuchsia-900' },
+    { border: 'border-lime-300',    accent: 'border-l-lime-400',    head: 'bg-lime-50',    label: 'bg-lime-100 text-lime-900' },
+];
+
+// Looks random but is fixed per record, so a card keeps its colour across
+// re-renders. Multiplying by 5 (coprime with 8) means any 8 consecutive ids
+// get 8 different colours; the salt keeps bundles and packages from lining up.
+const cardColor = (id, salt = 0) => CARD_COLORS[(Number(id) * 5 + salt) % CARD_COLORS.length];
+
+// Open work first, then Done, then Paid. Array.sort is stable, so each group
+// keeps the server's newest-first order.
+const STATUS_RANK = { done: 1, paid: 2 };
+const doneLast = (rows) => [...rows].sort((a, b) => (STATUS_RANK[a.status] || 0) - (STATUS_RANK[b.status] || 0));
+
+function Pager({ page, lastPage, total, onPage }) {
+    if (total <= PAGE_SIZE) return null;
+    const from = (page - 1) * PAGE_SIZE + 1;
+    const to = Math.min(page * PAGE_SIZE, total);
+    const btn = 'px-4 py-1.5 rounded-lg text-xs font-semibold text-white bg-[rgb(240,136,176)] hover:bg-[rgb(225,120,160)] shadow-sm transition disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed';
+
+    return (
+        <div className="flex items-center justify-between gap-2">
+            <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1} className={btn}>← Prev</button>
+            <span className="text-xs text-gray-500 font-medium">{from}–{to} of {total} · Page {page} of {lastPage}</span>
+            <button type="button" onClick={() => onPage(page + 1)} disabled={page >= lastPage} className={btn}>Next →</button>
+        </div>
+    );
+}
+
+// ── payment window ─────────────────────────────────────────────────────
+// Ticked together for payment: Done items, Done bundles and unpaid products.
+// (Package cards keep their own Done -> Pay button.)
+const payableKeys = (b) => new Set([
+    ...(b.items || []).filter((r) => r.status === 'done').map((r) => `item-${r.id}`),
+    ...(b.bundles || []).filter((r) => r.status === 'done').map((r) => `bundle-${r.id}`),
+    ...(b.products || []).filter((r) => r.status !== 'paid').map((r) => `product-${r.id}`),
+]);
+
+function PaymentWindow({ entries, busy, error, onClose, onConfirm }) {
+    const total = entries.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Payment">
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
+                <div className="px-5 py-4 border-b border-gray-100">
+                    <h3 className="text-sm font-bold text-gray-800">Record Payment</h3>
+                    <p className="text-xs text-gray-400 mt-0.5">Paid records are locked and can no longer be edited.</p>
+                </div>
+                <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+                    {entries.map((e) => (
+                        <div key={e.key} className="flex items-center justify-between gap-3 px-5 py-2.5 text-sm">
+                            <div className="min-w-0">
+                                <p className="font-semibold text-gray-800 truncate">{e.label}</p>
+                                <p className="text-xs text-gray-400">{e.typeLabel}</p>
+                            </div>
+                            <span className="font-semibold text-gray-700 shrink-0">{peso(e.amount)}</span>
+                        </div>
+                    ))}
+                </div>
+                <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-gray-500">Total</span>
+                    <span className="text-base font-bold text-gray-800">{peso(total)}</span>
+                </div>
+                {error && <div className="mx-5 mb-3 rounded-lg px-3 py-2 text-xs font-medium border bg-red-50 text-red-700 border-red-100">⚠️ {error}</div>}
+                <div className="px-5 pb-4 flex justify-end gap-2">
+                    <button type="button" onClick={onClose} disabled={busy} className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-semibold text-gray-600 hover:bg-gray-50 transition disabled:opacity-50">Cancel</button>
+                    <button type="button" onClick={onConfirm} disabled={busy || entries.length === 0} className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-lg text-sm font-semibold transition">
+                        {busy ? 'Recording...' : 'Record payment'}
+                    </button>
+                </div>
+            </div>
         </div>
     );
 }
@@ -374,29 +545,57 @@ const SECTIONS = {
     items: { label: 'Items', icon: Tag },
     bundles: { label: 'Bundles', icon: Gift },
     packages: { label: 'Packages', icon: PackageIcon },
+    products: { label: 'Products', icon: ShoppingBag },
 };
 
-export default function ClientScheduleBoard({ client }) {
-    const [data, setData] = useState({ items: [], bundles: [], packages: [] });
+// selection / setSelection / payOpen / setPayOpen come from ClientRecord so its
+// Payment buttons share the ticked list; the board falls back to its own state
+// when used on its own.
+export default function ClientScheduleBoard({ client, selection: selectionProp, setSelection: setSelectionProp, payOpen: payOpenProp, setPayOpen: setPayOpenProp }) {
+    const [localSelection, setLocalSelection] = useState([]);
+    const [localPayOpen, setLocalPayOpen] = useState(false);
+    const selection = selectionProp ?? localSelection;
+    const setSelection = setSelectionProp ?? setLocalSelection;
+    const payOpen = payOpenProp ?? localPayOpen;
+    const setPayOpen = setPayOpenProp ?? setLocalPayOpen;
+    const [payBusy, setPayBusy] = useState(false);
+    const [payError, setPayError] = useState(null);
+
+    const [data, setData] = useState({ items: [], bundles: [], packages: [], products: [] });
     const [staff, setStaff] = useState([]);
     const [tab, setTab] = useState('items');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
     const [editing, setEditing] = useState(null);
+    // Bundle and package cards start collapsed; this tracks which are open.
+    const [openCards, setOpenCards] = useState({});
+    // Current page of each tab's list (5 per page).
+    const [pages, setPages] = useState({ items: 1, bundles: 1, packages: 1, products: 1 });
+    const setPage = (key, page) => setPages((prev) => ({ ...prev, [key]: page }));
+    const isOpen = (key) => Boolean(openCards[key]);
+    const toggleOpen = (key) => setOpenCards((prev) => ({ ...prev, [key]: !prev[key] }));
     const [busy, setBusy] = useState(false);
+
+    // Store fresh bookings and drop ticks on anything no longer payable
+    // (paid, deleted or reopened).
+    const applyBookings = useCallback((bookings) => {
+        setData(bookings);
+        const keys = payableKeys(bookings);
+        setSelection((prev) => prev.filter((entry) => keys.has(entry.key)));
+    }, [setSelection]);
 
     const load = useCallback(async () => {
         setLoading(true);
         setError(null);
         try {
-            setData(await api(`/clients/${client.id}/schedules`, 'GET'));
+            applyBookings(await api(`/clients/${client.id}/schedules`, 'GET'));
         } catch (err) {
             setError(err.message || 'Unable to load the service record right now.');
         } finally {
             setLoading(false);
         }
-    }, [client.id]);
+    }, [client.id, applyBookings]);
 
     useEffect(() => {
         load();
@@ -409,7 +608,7 @@ export default function ClientScheduleBoard({ client }) {
         setNotice(null);
         try {
             const body = await request();
-            if (body.bookings) setData(body.bookings);
+            if (body.bookings) applyBookings(body.bookings);
             setEditing(null);
         } catch (err) {
             setNotice(err.message);
@@ -420,12 +619,52 @@ export default function ClientScheduleBoard({ client }) {
 
     const save = (url, payload) => run(() => api(url, 'PATCH', payload));
 
+    const isSelected = (key) => selection.some((entry) => entry.key === key);
+    const toggleSelect = (entry) => setSelection((prev) => (
+        prev.some((e) => e.key === entry.key) ? prev.filter((e) => e.key !== entry.key) : [...prev, entry]
+    ));
+
+    // Pays the ticked records one by one; stops at the first failure.
+    const confirmPayment = async () => {
+        setPayBusy(true);
+        setPayError(null);
+        try {
+            for (const entry of selection) {
+                const res = entry.type === 'bundle'
+                    ? await api(`/clients/${client.id}/bundle-schedules/${entry.id}/pay`, 'PATCH')
+                    : await api(`/clients/${client.id}/${entry.type === 'item' ? 'schedule-items' : 'schedule-products'}/${entry.id}`, 'PATCH', { paid: true });
+                if (res.bookings) applyBookings(res.bookings);
+            }
+            setPayOpen(false);
+        } catch (err) {
+            setPayError(err.message);
+        } finally {
+            setPayBusy(false);
+        }
+    };
+
     const remove = (type, id, label) => {
         if (!window.confirm(`Delete "${label}"? This cannot be undone.`)) return;
         run(() => api(`/clients/${client.id}/schedules/${type}/${id}`, 'DELETE'));
     };
 
-    const counts = { items: data.items.length, bundles: data.bundles.length, packages: data.packages.length };
+    const products = data.products || [];
+
+    // Done / paid last, then the first 5 of the current page. The page is
+    // clamped so deleting or paying the last row of a page never strands you.
+    const paginate = (list, key) => {
+        const sorted = doneLast(list);
+        const lastPage = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+        const page = Math.min(pages[key] || 1, lastPage);
+        return { rows: sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), page, lastPage, total: sorted.length, onPage: (p) => setPage(key, p) };
+    };
+    const view = {
+        items: paginate(data.items, 'items'),
+        bundles: paginate(data.bundles, 'bundles'),
+        packages: paginate(data.packages, 'packages'),
+        products: paginate(products, 'products'),
+    };
+    const counts = { items: data.items.length, bundles: data.bundles.length, packages: data.packages.length, products: products.length };
     const empty = (
         <div className="text-center py-12 text-gray-400 text-sm flex flex-col items-center gap-1">
             <span className="text-2xl">🗓️</span>
@@ -459,51 +698,100 @@ export default function ClientScheduleBoard({ client }) {
             ) : (
                 <>
                     {tab === 'items' && (data.items.length === 0 ? empty : (
-                        <div className="border border-gray-100 rounded-xl divide-y divide-gray-50">
-                            {data.items.map((row) => (
-                                <LineRow
-                                    key={row.id}
-                                    title={row.item_name}
-                                    subtitle={`Item · ${peso(row.price)}`}
-                                    line={row}
-                                    url={`/clients/${client.id}/schedule-items/${row.id}`}
-                                    staff={staff}
-                                    editingKey={`item-${row.id}`}
-                                    editing={editing}
-                                    setEditing={setEditing}
-                                    busy={busy}
-                                    save={save}
-                                    onDelete={() => remove('item', row.id, row.item_name)}
-                                    onPay={() => confirmPay(row.item_name) && run(() => api(`/clients/${client.id}/schedule-items/${row.id}`, 'PATCH', { paid: true }))}
-                                />
-                            ))}
+                        <div className="space-y-3">
+                        <div className="space-y-2">
+                            {view.items.rows.map((row) => {
+                                const key = `item-${row.id}`;
+                                return (
+                                    <LineRow
+                                        key={row.id}
+                                        color={cardColor(row.id, 1)}
+                                        title={row.item_name}
+                                        subtitle={`Item · ${peso(row.price)}`}
+                                        line={row}
+                                        url={`/clients/${client.id}/schedule-items/${row.id}`}
+                                        staff={staff}
+                                        editingKey={key}
+                                        editing={editing}
+                                        setEditing={setEditing}
+                                        busy={busy}
+                                        save={save}
+                                        onDelete={() => remove('item', row.id, row.item_name)}
+                                        selected={isSelected(key)}
+                                        onToggleSelect={() => toggleSelect({ key, type: 'item', id: row.id, typeLabel: 'Item', label: row.item_name, amount: row.price })}
+                                    />
+                                );
+                            })}
+                        </div>
+                        <Pager {...view.items} />
                         </div>
                     ))}
 
-                    {tab === 'bundles' && (data.bundles.length === 0 ? empty : data.bundles.map((bundle) => {
+                    {tab === 'products' && (products.length === 0 ? empty : (
+                        <div className="space-y-3">
+                        <div className="space-y-2">
+                            {view.products.rows.map((row) => {
+                                const key = `product-${row.id}`;
+                                return (
+                                    <ProductRow
+                                        key={row.id}
+                                        row={row}
+                                        color={cardColor(row.id, 2)}
+                                        busy={busy}
+                                        onQuantity={(quantity) => save(`/clients/${client.id}/schedule-products/${row.id}`, { quantity })}
+                                        onDelete={() => remove('product', row.id, row.product_name)}
+                                        selected={isSelected(key)}
+                                        onToggleSelect={() => toggleSelect({
+                                            key, type: 'product', id: row.id, typeLabel: 'Product', label: row.product_name,
+                                            amount: row.total ?? Number(row.price || 0) * normalizeQuantity(row.quantity),
+                                        })}
+                                    />
+                                );
+                            })}
+                        </div>
+                        <Pager {...view.products} />
+                        </div>
+                    ))}
+
+                    {tab === 'bundles' && (data.bundles.length === 0 ? empty : (
+                        <div className="space-y-3">
+                        {view.bundles.rows.map((bundle) => {
                         const doneLines = bundle.lines.filter((l) => l.status === 'done' || l.status === 'paid').length;
+                        const open = isOpen(`bundle-${bundle.id}`);
+                        const color = cardColor(bundle.id, 0);
                         return (
-                            <div key={bundle.id} className="border border-gray-200 rounded-xl overflow-hidden bg-white">
-                                <div className="flex items-center justify-between gap-3 px-4 py-3 bg-gray-50/70 border-b border-gray-100">
-                                    <div className="min-w-0">
-                                        <h4 className="text-sm font-bold text-gray-800 truncate">{bundle.bundle_name}</h4>
-                                        <p className="text-xs text-gray-500">Bundle · {peso(bundle.bundle_price)} · {doneLines}/{bundle.lines.length} done</p>
-                                    </div>
+                            <div key={bundle.id} className={`border border-l-4 ${color.border} ${color.accent} rounded-xl overflow-hidden bg-white`}>
+                                <div className={`flex items-center justify-between gap-3 px-4 py-3 ${color.head} ${open ? `border-b ${color.border}` : ''}`}>
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleOpen(`bundle-${bundle.id}`)}
+                                        aria-expanded={open}
+                                        title={open ? 'Collapse bundle' : 'Expand bundle'}
+                                        className="flex items-center gap-2 min-w-0 flex-1 text-left"
+                                    >
+                                        {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+                                        <div className="min-w-0">
+                                            <h4 className="text-sm font-bold text-gray-800 truncate">{bundle.bundle_name}</h4>
+                                            <p className="text-xs text-gray-500">Bundle · {peso(bundle.bundle_price)} · {doneLines}/{bundle.lines.length} done</p>
+                                        </div>
+                                    </button>
                                     <div className="flex items-center gap-1 shrink-0">
                                         <StatusChip status={bundle.status} />
-                                        {bundle.status === 'done' && (
-                                            <PayButton
-                                                busy={busy}
-                                                onPay={() => confirmPay(bundle.bundle_name) && run(() => api(`/clients/${client.id}/bundle-schedules/${bundle.id}/pay`, 'PATCH'))}
-                                            />
-                                        )}
-                                        {bundle.status !== 'paid' && (
+                                        {bundle.status !== 'paid' && bundle.status !== 'done' && (
                                             <button type="button" title="Delete bundle booking" aria-label="Delete bundle booking" onClick={() => remove('bundle', bundle.id, bundle.bundle_name)} className={`${iconBtn} text-red-500 hover:bg-red-50`}>
                                                 <Trash2 className="w-4 h-4" />
                                             </button>
                                         )}
+                                        {bundle.status === 'done' && (
+                                            <SelectBox
+                                                checked={isSelected(`bundle-${bundle.id}`)}
+                                                label={`Select ${bundle.bundle_name} for payment`}
+                                                onChange={() => toggleSelect({ key: `bundle-${bundle.id}`, type: 'bundle', id: bundle.id, typeLabel: 'Bundle', label: bundle.bundle_name, amount: bundle.bundle_price })}
+                                            />
+                                        )}
                                     </div>
                                 </div>
+                                {open && (
                                 <div className="divide-y divide-gray-50">
                                     {bundle.lines.map((line) => (
                                         <LineRow
@@ -521,13 +809,17 @@ export default function ClientScheduleBoard({ client }) {
                                         />
                                     ))}
                                 </div>
+                                )}
                             </div>
                         );
-                    }))}
+                        })}
+                        <Pager {...view.bundles} />
+                        </div>
+                    ))}
 
                     {tab === 'packages' && (data.packages.length === 0 ? empty : (
                         <div className="space-y-4">
-                            {data.packages.map((record) => (
+                            {view.packages.rows.map((record) => (
                                 <PackageCard
                                     key={record.id}
                                     record={record}
@@ -538,12 +830,26 @@ export default function ClientScheduleBoard({ client }) {
                                     busy={busy}
                                     save={save}
                                     onDelete={() => remove('package', record.id, record.package_name)}
+                                    color={cardColor(record.id, 3)}
+                                    open={isOpen(`package-${record.id}`)}
+                                    onToggle={() => toggleOpen(`package-${record.id}`)}
                                     onPay={() => confirmPay(record.package_name) && run(() => api(`/clients/${client.id}/package-records/${record.id}/pay`, 'PATCH'))}
                                 />
                             ))}
+                            <Pager {...view.packages} />
                         </div>
                     ))}
                 </>
+            )}
+
+            {payOpen && (
+                <PaymentWindow
+                    entries={selection}
+                    busy={payBusy}
+                    error={payError}
+                    onClose={() => { setPayOpen(false); setPayError(null); }}
+                    onConfirm={confirmPayment}
+                />
             )}
         </div>
     );

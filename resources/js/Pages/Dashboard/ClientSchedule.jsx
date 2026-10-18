@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, X, Search, Tag, Package as PackageIcon, Gift } from 'lucide-react';
+import { Plus, Minus, X, Search, Tag, Package as PackageIcon, Gift, ShoppingBag } from 'lucide-react';
 import ClientProfileHeader from './ClientProfileHeader';
 
 function getXsrfToken() {
@@ -41,16 +41,35 @@ const TABS = {
         getSubtitle: (r) => plural(Number(r.session_count || 1), 'session'),
         getPrice: (r) => r.package_price,
     },
+    products: {
+        label: 'Products',
+        icon: ShoppingBag,
+        endpoint: '/products',
+        responseKey: 'products',
+        getId: (r) => r.id,
+        getName: (r) => r.product_name,
+        getSubtitle: (r) => r.product_description || 'Product',
+        getPrice: (r) => r.price,
+    },
 };
 
 const peso = (value) => `₱${Number(value || 0).toFixed(2)}`;
 
+const MAX_QUANTITY = 999;
+
+// Quantity is only ever a whole number from 1 to 999.
+const normalizeQuantity = (value) => Math.min(MAX_QUANTITY, Math.max(1, parseInt(value, 10) || 1));
+
+// Products are booked with a quantity (line total = unit price x quantity);
+// items, bundles and packages always count once.
+const lineTotal = (row) => Number(row.price || 0) * (row.type === 'products' ? normalizeQuantity(row.quantity) : 1);
+
 // The tab key ('items') differs from what the API validates ('item').
-const API_TYPE = { items: 'item', bundles: 'bundle', packages: 'package' };
+const API_TYPE = { items: 'item', bundles: 'bundle', packages: 'package', products: 'product' };
 
 /**
- * Booking step of the scheduling module: pick items, bundles and/or
- * packages for a client. Date, time and staff are NOT chosen here — every
+ * Booking step of the scheduling module: pick items, bundles, packages
+ * and/or products for a client. Date, time and staff are NOT chosen here — every
  * booked item / bundle item / package session is assigned individually
  * later, from the client's service record (ClientScheduleBoard).
  */
@@ -111,13 +130,23 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
         setSelected((prev) => (
             prev.some((row) => row.uid === uid)
                 ? prev
-                : [...prev, { uid, type: activeTab, refId, name: config.getName(record), price: config.getPrice(record) }]
+                : [...prev, { uid, type: activeTab, refId, name: config.getName(record), price: config.getPrice(record), quantity: 1 }]
         ));
     };
 
     const handleRemove = (uid) => setSelected((prev) => prev.filter((row) => row.uid !== uid));
 
-    const total = selected.reduce((sum, row) => sum + Number(row.price || 0), 0);
+    // While typing, an empty box is allowed; anything else is clamped to
+    // 1-999. Leaving the box (onBlur) turns an empty value back into 1.
+    const handleQuantity = (uid, value, { typing = false } = {}) => {
+        setSelected((prev) => prev.map((row) => (
+            row.uid === uid
+                ? { ...row, quantity: typing && value === '' ? '' : normalizeQuantity(value) }
+                : row
+        )));
+    };
+
+    const total = selected.reduce((sum, row) => sum + lineTotal(row), 0);
 
     const handleCancel = () => {
         setSelected([]);
@@ -142,7 +171,11 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
                 },
                 credentials: 'same-origin',
                 body: JSON.stringify({
-                    items: selected.map((row) => ({ type: API_TYPE[row.type], id: row.refId })),
+                    items: selected.map((row) => ({
+                        type: API_TYPE[row.type],
+                        id: row.refId,
+                        ...(row.type === 'products' ? { quantity: normalizeQuantity(row.quantity) } : {}),
+                    })),
                 }),
             });
 
@@ -278,8 +311,44 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
                                         <h4 className="text-sm font-bold text-gray-800 truncate">{row.name}</h4>
                                         <p className="text-xs text-gray-500 truncate mt-0.5">
                                             {TABS[row.type].label.replace(/s$/, '')} · {peso(row.price)}
+                                            {row.type === 'products' && (
+                                                <> × {normalizeQuantity(row.quantity)} = <span className="font-semibold text-gray-700">{peso(lineTotal(row))}</span></>
+                                            )}
                                         </p>
                                     </div>
+                                    {row.type === 'products' && (
+                                        <div className="ml-auto mr-3 shrink-0 flex items-center border border-gray-200 rounded-lg overflow-hidden bg-white">
+                                            <button
+                                                type="button"
+                                                onClick={() => handleQuantity(row.uid, normalizeQuantity(row.quantity) - 1)}
+                                                disabled={normalizeQuantity(row.quantity) <= 1}
+                                                aria-label={`Decrease quantity of ${row.name}`}
+                                                className="w-7 h-8 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                <Minus className="w-3.5 h-3.5" />
+                                            </button>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max={MAX_QUANTITY}
+                                                inputMode="numeric"
+                                                value={row.quantity}
+                                                onChange={(e) => handleQuantity(row.uid, e.target.value, { typing: true })}
+                                                onBlur={() => handleQuantity(row.uid, row.quantity)}
+                                                aria-label={`Quantity of ${row.name}`}
+                                                className="w-12 h-8 text-center text-sm font-semibold text-gray-800 outline-none border-x border-gray-200 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => handleQuantity(row.uid, normalizeQuantity(row.quantity) + 1)}
+                                                disabled={normalizeQuantity(row.quantity) >= MAX_QUANTITY}
+                                                aria-label={`Increase quantity of ${row.name}`}
+                                                className="w-7 h-8 flex items-center justify-center text-gray-500 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                                            >
+                                                <Plus className="w-3.5 h-3.5" />
+                                            </button>
+                                        </div>
+                                    )}
                                     <button
                                         type="button"
                                         onClick={() => handleRemove(row.uid)}
@@ -295,7 +364,7 @@ export default function ClientSchedule({ client, onCancel, onSaved }) {
                             <div className="text-center py-12 text-gray-400 text-sm flex flex-col items-center justify-center gap-1">
                                 <span className="text-2xl">📋</span>
                                 <span>No services selected yet.</span>
-                                <span className="text-xs">Use the + icon on the left to add items, bundles, or packages.</span>
+                                <span className="text-xs">Use the + icon on the left to add items, bundles, packages, or products.</span>
                             </div>
                         )}
                     </div>

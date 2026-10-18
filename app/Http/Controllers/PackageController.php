@@ -78,7 +78,8 @@ class PackageController extends Controller
             'package_name'        => 'required|string|max:255',
             'package_price'       => 'required|numeric|min:0',
             'package_description' => 'nullable|string',
-            'session_count'       => 'nullable|integer|min:1|max:50',
+            'session_count'       => 'nullable|integer|min:1|max:5',
+            'free_session_count'  => 'nullable|integer|min:0|max:5',
             'item_ids'            => 'nullable|array',
             'item_ids.*'          => 'integer|distinct|exists:sale_items,id',
             'status'              => 'nullable|in:active,inactive',
@@ -89,6 +90,7 @@ class PackageController extends Controller
             'package_price'       => $validated['package_price'],
             'package_description' => $validated['package_description'] ?? null,
             'session_count'       => $validated['session_count'] ?? 1,
+            'free_session_count'  => $validated['free_session_count'] ?? 0,
             'status'               => $validated['status'] ?? 'active',
         ]);
 
@@ -114,7 +116,8 @@ class PackageController extends Controller
             'package_name'        => 'required|string|max:255',
             'package_price'       => 'required|numeric|min:0',
             'package_description' => 'nullable|string',
-            'session_count'       => 'nullable|integer|min:1|max:50',
+            'session_count'       => 'nullable|integer|min:1|max:5',
+            'free_session_count'  => 'nullable|integer|min:0|max:5',
             'item_ids'            => 'nullable|array',
             'item_ids.*'          => 'integer|distinct|exists:sale_items,id',
             'status'              => 'nullable|in:active,inactive',
@@ -125,6 +128,7 @@ class PackageController extends Controller
             'package_price'       => $validated['package_price'],
             'package_description' => $validated['package_description'] ?? $package->package_description,
             'session_count'       => $validated['session_count'] ?? $package->session_count,
+            'free_session_count'  => $validated['free_session_count'] ?? $package->free_session_count,
             'status'               => $validated['status'] ?? $package->status,
         ]);
 

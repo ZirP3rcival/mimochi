@@ -42,7 +42,7 @@ const KIND_CONFIG = {
     },
 };
 
-const EMPTY_FORM = { name: '', price: '', description: '', sessionCount: '1' };
+const EMPTY_FORM = { name: '', price: '', description: '', sessionCount: '1', freeSessionCount: '0' };
 
 // Catalog item picker shows this many sale items per page.
 const ITEMS_PER_PAGE = 4;
@@ -271,6 +271,7 @@ export default function BundlePackageTab({ kind }) {
                 price: record[cfg.priceField] ?? '',
                 description: cfg.descriptionField ? (record[cfg.descriptionField] || '') : '',
                 sessionCount: String(record.session_count ?? 1),
+                freeSessionCount: String(record.free_session_count ?? 0),
             });
             setSelectedItems(record.items || []);
         } else if (actionType === 'create') {
@@ -299,6 +300,7 @@ export default function BundlePackageTab({ kind }) {
         }
         if (cfg.hasSessions) {
             payload.append('session_count', form.sessionCount || '1');
+            payload.append('free_session_count', form.freeSessionCount || '0');
         }
         selectedItems.forEach((item) => payload.append('item_ids[]', item.id));
 
@@ -475,7 +477,7 @@ export default function BundlePackageTab({ kind }) {
                                     <div className="min-w-0">
                                         <h4 className="text-sm font-bold text-gray-800 truncate">{record[cfg.nameField]}</h4>
                                         <p className="text-xs text-gray-500 truncate mt-0.5">
-                                            {cfg.hasSessions && `${record.session_count ?? 1} session${(record.session_count ?? 1) === 1 ? '' : 's'} · `}{(record.items || []).length} item{(record.items || []).length === 1 ? '' : 's'} · {formatMoney(record[cfg.priceField])}
+                                            {cfg.hasSessions && `${record.session_count ?? 1} session${(record.session_count ?? 1) === 1 ? '' : 's'}${(record.free_session_count ?? 0) > 0 ? ` + ${record.free_session_count} free` : ''} · `}{(record.items || []).length} item{(record.items || []).length === 1 ? '' : 's'} · {formatMoney(record[cfg.priceField])}
                                         </p>
                                         {cfg.descriptionField && record[cfg.descriptionField] && (
                                             <p className="text-[11px] text-gray-400 truncate italic mt-0.5">{record[cfg.descriptionField]}</p>
@@ -633,18 +635,34 @@ export default function BundlePackageTab({ kind }) {
 
                             {cfg.hasSessions && (
                                 <div>
-                                    <label className="block text-xs font-semibold text-gray-600 mb-1.5">Number of Sessions</label>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        max="50"
-                                        value={form.sessionCount}
-                                        onChange={(e) => setForm((prev) => ({ ...prev, sessionCount: e.target.value }))}
-                                        className="w-full sm:w-1/2 p-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[rgb(240,136,176)]"
-                                        required
-                                    />
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5">Number of Sessions</label>
+                                            <input
+                                                type="number"
+                                                min="1"
+                                                max="5"
+                                                value={form.sessionCount}
+                                                onChange={(e) => setForm((prev) => ({ ...prev, sessionCount: e.target.value }))}
+                                                className="w-full p-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[rgb(240,136,176)]"
+                                                required
+                                            />
+                                            {fieldErrors.session_count && <span className="text-xs text-red-500">{fieldErrors.session_count}</span>}
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-600 mb-1.5">Number of Free Sessions</label>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="5"
+                                                value={form.freeSessionCount}
+                                                onChange={(e) => setForm((prev) => ({ ...prev, freeSessionCount: e.target.value }))}
+                                                className="w-full p-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[rgb(240,136,176)]"
+                                            />
+                                            {fieldErrors.free_session_count && <span className="text-xs text-red-500">{fieldErrors.free_session_count}</span>}
+                                        </div>
+                                    </div>
                                     <p className="text-[11px] text-gray-400 mt-1">Each session also gets an optional Free slot on the client's package card.</p>
-                                    {fieldErrors.session_count && <span className="text-xs text-red-500">{fieldErrors.session_count}</span>}
                                 </div>
                             )}
 
