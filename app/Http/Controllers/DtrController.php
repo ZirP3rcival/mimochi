@@ -148,7 +148,7 @@ class DtrController extends Controller
     /** Saves to public/uploads/dtr/YYYY-MM-DD/ and returns the path relative to /public. */
     private function storeImage(Request $request, int $staffId, string $type, Carbon $now): string
     {
-        $dir = 'uploads/dtr/' . $now->format('Y-m-d');
+        $dir = 'storage/dtr/' . $now->format('Y-m-d');
         File::ensureDirectoryExists(public_path($dir), 0755, true);
 
         $name = "{$staffId}_{$type}_" . $now->format('His') . '.jpg';
