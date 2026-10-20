@@ -37,6 +37,7 @@ Route::prefix('dtr')->middleware('throttle:60,1')->group(function () {
     Route::get('/time', [DtrController::class, 'time'])->name('dtr.time');
     Route::get('/staff', [DtrController::class, 'staff'])->name('dtr.staff');
     Route::get('/status', [DtrController::class, 'status'])->name('dtr.status');
+    Route::get('/time-in', function () { return Inertia::render('Auth/Login'); }); 
     Route::post('/time-in', [DtrController::class, 'timeIn'])->name('dtr.time_in');
     Route::post('/time-out', [DtrController::class, 'timeOut'])->name('dtr.time_out');
 });
