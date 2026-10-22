@@ -22,7 +22,8 @@ class DtrController extends Controller
 
     // Schedule rules (minutes are counted from these clock times)
     private const LATE_AFTER = '10:00:00';      // 10:00 AM
-    private const OVERTIME_AFTER = '20:00:00';  // 8:00 PM
+    private const OVERTIME_AFTER = '20:00:00';  // 8:00 PM (end of the 10:00 AM - 8:00 PM schedule)
+    private const TIME_IN_CUTOFF = '20:00:00'; // no new time in at or after this
 
     /** Authoritative server time. The page ticks from this, not from the PC clock. */
     public function time(): JsonResponse
@@ -50,18 +51,24 @@ class DtrController extends Controller
         return response()->json($list);
     }
 
-    /** Today's record for a staff member, so the UI can enable the right button. */
+    /**
+     * Today's latest punch for a staff member so the UI can enable the right
+     * button. TIME IN needs the latest punch to be closed (or none yet);
+     * TIME OUT needs it to still be open.
+     */
     public function status(Request $request): JsonResponse
     {
         $request->validate(['staff_id' => ['required', 'integer']]);
 
-        $rec = DailyTimeRecord::where('staff_id', $request->staff_id)
-            ->whereDate('record_date', $this->now()->toDateString())
-            ->first();
+        $q = DailyTimeRecord::where('staff_id', $request->staff_id)
+            ->whereDate('record_date', $this->now()->toDateString());
+
+        $latest = (clone $q)->latest('id')->first();
 
         return response()->json([
-            'time_in'  => $rec?->time_in,
-            'time_out' => $rec?->time_out,
+            'time_in'  => $latest?->time_in,
+            'time_out' => $latest?->time_out,
+            'punches'  => $q->count(),
         ]);
     }
 
@@ -69,25 +76,45 @@ class DtrController extends Controller
     {
         $data = $this->validated($request);
         $now = $this->now();
+        $today = $now->toDateString();
 
-        $existing = DailyTimeRecord::where('staff_id', $data['staff_id'])
-            ->whereDate('record_date', $now->toDateString())->first();
-
-        if ($existing && $existing->time_in) {
-            return response()->json(['message' => 'Already timed in today at ' . $this->fmt($existing->time_in) . '.'], 422);
+        // No new time in from 8:00 PM onwards.
+        if ($now->greaterThanOrEqualTo($now->copy()->setTimeFromTimeString(self::TIME_IN_CUTOFF))) {
+            return response()->json(['message' => 'Time in is not allowed after 8:00 PM.'], 422);
         }
+
+        // A new time in is only allowed once the current one has been timed out.
+        $open = DailyTimeRecord::where('staff_id', $data['staff_id'])
+            ->whereDate('record_date', $today)
+            ->whereNull('time_out')
+            ->latest('id')->first();
+
+        if ($open) {
+            return response()->json(['message' => 'Already timed in at ' . $this->fmt($open->time_in) . '. Time out first.'], 422);
+        }
+
+        // Late is measured against 10:00 AM on the first time in of the day only.
+        $isFirstToday = ! DailyTimeRecord::where('staff_id', $data['staff_id'])
+            ->whereDate('record_date', $today)->exists();
 
         $path = $this->storeImage($request, $data['staff_id'], 'in', $now);
 
         $rec = DailyTimeRecord::create([
             'staff_id'      => $data['staff_id'],
             'staff_name'    => $data['staff']->staff_name,
-            'record_date'   => $now->toDateString(),
+            'record_date'   => $today,
             'time_in'       => $now->format('H:i:s'),
-            'late'          => $this->minutesAfter($now, self::LATE_AFTER),
+            'late'          => $isFirstToday ? $this->minutesAfter($now, self::LATE_AFTER) : 0,
             'time_in_image' => $path,
             'ip_address'    => $request->ip(),
         ]);
+
+        // They came back, so earlier early time-outs today are not undertime:
+        // undertime only stands on the day's last time out.
+        DailyTimeRecord::where('staff_id', $data['staff_id'])
+            ->whereDate('record_date', $today)
+            ->where('undertime', '>', 0)
+            ->update(['undertime' => 0]);
 
         return response()->json([
             'message' => 'Time in recorded at ' . $this->fmt($rec->time_in) . '.'
@@ -101,26 +128,29 @@ class DtrController extends Controller
         $data = $this->validated($request);
         $now = $this->now();
 
+        // The open punch (timed in, not yet timed out) for today.
         $rec = DailyTimeRecord::where('staff_id', $data['staff_id'])
-            ->whereDate('record_date', $now->toDateString())->first();
+            ->whereDate('record_date', $now->toDateString())
+            ->whereNotNull('time_in')
+            ->whereNull('time_out')
+            ->latest('id')->first();
 
-        if (! $rec || ! $rec->time_in) {
-            return response()->json(['message' => 'No time in found for today. Time in first.'], 422);
-        }
-        if ($rec->time_out) {
-            return response()->json(['message' => 'Already timed out today at ' . $this->fmt($rec->time_out) . '.'], 422);
+        if (! $rec) {
+            return response()->json(['message' => 'No open time in found. Time in first.'], 422);
         }
 
         $rec->update([
             'time_out'       => $now->format('H:i:s'),
-            'overtime'       => $this->minutesAfter($now, self::OVERTIME_AFTER),
-            'undertime'      => $this->minutesBefore($now, self::OVERTIME_AFTER),
+            'overtime'       => $this->minutesAfter($now, self::OVERTIME_AFTER),   // after 8:00 PM
+            'undertime'      => $this->minutesBefore($now, self::OVERTIME_AFTER),  // before 8:00 PM
+            'work_minutes'   => $this->minutesWorked($rec->time_in, $now),         // time in -> time out
             'time_out_image' => $this->storeImage($request, $data['staff_id'], 'out', $now),
         ]);
 
         return response()->json([
             'message'  => 'Time out recorded at ' . $this->fmt($rec->time_out) . '.'
                 . ($rec->overtime > 0 ? " Overtime: {$rec->overtime} min." : '')
+                . " Worked {$rec->work_minutes} min."
                 . ($rec->undertime > 0 ? " Undertime: {$rec->undertime} min." : ''),
             'time_out' => $rec->time_out,
         ]);
@@ -145,7 +175,7 @@ class DtrController extends Controller
         return $data;
     }
 
-    /** Saves to public/uploads/dtr/YYYY-MM-DD/ and returns the path relative to /public. */
+    /** Saves to public/storage/dtr/YYYY-MM-DD/ and returns the path relative to /public. */
     private function storeImage(Request $request, int $staffId, string $type, Carbon $now): string
     {
         $dir = 'storage/dtr/' . $now->format('Y-m-d');
@@ -176,6 +206,14 @@ class DtrController extends Controller
         $limit = $now->copy()->setTimeFromTimeString($cutoff);
 
         return $now->lessThan($limit) ? (int) floor($now->diffInMinutes($limit, true)) : 0;
+    }
+
+    /** Whole minutes from $timeIn (H:i:s, same day) to $now. */
+    private function minutesWorked(string $timeIn, Carbon $now): int
+    {
+        $start = $now->copy()->setTimeFromTimeString($timeIn);
+
+        return max(0, (int) floor($start->diffInMinutes($now, true)));
     }
 
     private function now(): Carbon

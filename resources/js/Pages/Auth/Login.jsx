@@ -138,6 +138,8 @@ function DtrModule() {
     const [camError, setCamError] = useState('');
     const [status, setStatus] = useState({ time_in: null, time_out: null });
     const [busy, setBusy] = useState(false);
+    // After a time in / time out the buttons stay disabled until a staff name is selected again.
+    const [locked, setLocked] = useState(false);
     const [msg, setMsg] = useState(null); // { type: 'ok' | 'err', text }
 
     // staff list from DB
@@ -156,6 +158,7 @@ function DtrModule() {
 
     // open camera when a staff name is selected
     useEffect(() => {
+        setLocked(false); // a (re)selected staff name enables the buttons again
         setMsg(null);
         setCamError('');
         if (!staffId) {
@@ -200,6 +203,7 @@ function DtrModule() {
         setCamError('');
         setMsg(null);
         setBusy(false);
+        setLocked(false);
     }
 
     function captureBlob() {
@@ -229,9 +233,12 @@ function DtrModule() {
             const j = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(j.message || Object.values(j.errors || {})[0]?.[0] || 'Request failed.');
 
+            setLocked(true); // punch done: no further time in / out until the name is changed
             const who = staff.find((s) => String(s.id) === String(staffId))?.name;
             setMsg({ type: 'ok', text: `${who}: ${j.message}` });
-            setStatus((s) => ({ ...s, ...(kind === 'in' ? { time_in: j.time_in } : { time_out: j.time_out }) }));
+            setStatus((s) => (kind === 'in'
+                ? { time_in: j.time_in, time_out: null, punches: (s.punches || 0) + 1 }
+                : { ...s, time_out: j.time_out }));
             // clear selection + close camera shortly after a successful punch
             setTimeout(resetModule, 3500);
         } catch (e) {
@@ -261,8 +268,15 @@ function DtrModule() {
         }
     }
 
-    const canIn = staffId && camReady && !busy && !status.time_in;
-    const canOut = staffId && camReady && !busy && status.time_in && !status.time_out;
+    // Multiple punches a day. A new TIME IN needs the current one timed out first,
+    // and TIME IN is closed from 8:00 PM (Manila time, same rule the server enforces).
+    const hasOpenPunch = !!status.time_in && !status.time_out;
+    const manilaHour = clock
+        ? parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', hour12: false }).format(clock.date), 10) % 24
+        : 0;
+    const timeInClosed = manilaHour >= 20;
+    const canIn = staffId && camReady && !busy && !locked && !hasOpenPunch && !timeInClosed;
+    const canOut = staffId && camReady && !busy && !locked && hasOpenPunch;
 
     return (
         <div className="w-full flex flex-col bg-white shadow-md px-5 sm:px-8 py-5 lg:py-[clamp(0.75rem,2.5vh,2rem)] lg:h-full lg:max-h-[820px]" style={{ borderRadius: '30px' }}>
@@ -350,6 +364,10 @@ function DtrModule() {
                 <p className="mt-2 text-center text-xs text-gray-500">
                     Today: {status.time_in ? `In ${status.time_in}` : ''}{status.time_out ? ` · Out ${status.time_out}` : ''}
                 </p>
+            )}
+
+            {staffId && timeInClosed && !hasOpenPunch && (
+                <p className="mt-2 text-center text-xs text-amber-700">Time in is closed after 8:00 PM.</p>
             )}
 
             {msg && (
