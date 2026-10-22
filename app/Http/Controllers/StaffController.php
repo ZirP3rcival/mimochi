@@ -39,6 +39,7 @@ class StaffController extends Controller
         'staff.address', 'staff.birthdate', 'staff.tin', 'staff.sss_no',
         'staff.philhealth_no', 'staff.emergency_contact', 'staff.photo_path', 'staff.username',
         'staff.user_type', 'staff.position_id', 'staff.available', 'staff.can_login', 'staff.active',
+        'staff.salary_rate',
     ];
 
     /**
@@ -126,6 +127,7 @@ class StaffController extends Controller
             'position_id'       => ['nullable', 'integer', $this->activePositionRule($staff?->position_id)],
             'available'         => 'sometimes|boolean',
             'can_login'         => 'sometimes|boolean',
+            'salary_rate'       => 'nullable|numeric|min:0|max:99999999.99',
         ];
     }
 
@@ -139,6 +141,8 @@ class StaffController extends Controller
             'tin.regex'            => 'TIN may only contain numbers (and - or spaces), no letters.',
             'sss_no.regex'         => 'SSS No may only contain numbers (and - or spaces), no letters.',
             'philhealth_no.regex'  => 'PhilHealth No may only contain numbers (and - or spaces), no letters.',
+            'salary_rate.numeric'  => 'Salary rate must be a number.',
+            'salary_rate.min'      => 'Salary rate cannot be negative.',
         ];
     }
 
@@ -225,6 +229,11 @@ class StaffController extends Controller
         $validated = $request->validate($this->rules(), $this->messages());
         $validated = $this->applyPhoto($request, $validated);
 
+        // salary_rate is written explicitly (not mass-assigned) so it is saved
+        // even if the Staff model's $fillable list doesn't include it.
+        $salaryRate = (float) ($validated['salary_rate'] ?? 0);
+        unset($validated['salary_rate']);
+
         // 'active' isn't on the registration form on purpose: new accounts
         // start enabled (the migration's default) and are flipped on/off
         // afterwards from the directory list's toggle icon, not this form.
@@ -232,6 +241,7 @@ class StaffController extends Controller
         // The plaintext password never touches the database directly:
         // Staff::setPasswordAttribute() hashes it on assignment below.
         $staffMember = Staff::create($validated);
+        $staffMember->forceFill(['salary_rate' => $salaryRate])->save();
 
         if ($request->wantsJson()) {
             return response()->json([
@@ -275,6 +285,14 @@ class StaffController extends Controller
 
         $validated = $this->applyPhoto($request, $validated, $staff);
 
+        // Only touch the salary rate when the form sent it (see store()).
+        $salaryRate = null;
+        $hasSalary = array_key_exists('salary_rate', $validated);
+        if ($hasSalary) {
+            $salaryRate = (float) ($validated['salary_rate'] ?? 0);
+            unset($validated['salary_rate']);
+        }
+
         // Don't overwrite the stored hash with an empty value just because
         // the admin left the password field blank while editing.
         if (empty($validated['password'])) {
@@ -282,6 +300,10 @@ class StaffController extends Controller
         }
 
         $staff->update($validated);
+
+        if ($hasSalary) {
+            $staff->forceFill(['salary_rate' => $salaryRate])->save();
+        }
 
         if ($request->wantsJson()) {
             return response()->json([

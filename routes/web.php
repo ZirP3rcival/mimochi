@@ -13,7 +13,9 @@ use App\Http\Controllers\PositionController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\UserRoleController;
+use App\Models\Client;
 use App\Models\UserRole;
+use App\Models\DashboardStats;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -37,7 +39,8 @@ Route::prefix('dtr')->middleware('throttle:60,1')->group(function () {
     Route::get('/time', [DtrController::class, 'time'])->name('dtr.time');
     Route::get('/staff', [DtrController::class, 'staff'])->name('dtr.staff');
     Route::get('/status', [DtrController::class, 'status'])->name('dtr.status');
-    Route::get('/time-in', function () { return Inertia::render('Auth/Login'); }); 
+    // Opening /dtr/time-in directly (e.g. after a redirect) shows the login + DTR page.
+    Route::get('/time-in', function () { return Inertia::render('Auth/Login'); });
     Route::post('/time-in', [DtrController::class, 'timeIn'])->name('dtr.time_in');
     Route::post('/time-out', [DtrController::class, 'timeOut'])->name('dtr.time_out');
 });
@@ -53,6 +56,7 @@ Route::middleware(['auth:staff', 'user_type:admin'])->group(function () {
         return Inertia::render('Dashboard/dashboard-admin', [
             'staff' => Auth::guard('staff')->user(),
             'allowedModules' => UserRole::modulesFor(Auth::guard('staff')->user()),
+            'dashboard' => DashboardStats::overview(),
         ]);
     })->name('dashboard_main');
 });
@@ -62,9 +66,40 @@ Route::middleware(['auth:staff', 'user_type:staff'])->group(function () {
         return Inertia::render('Dashboard/dashboard-admin2', [
             'staff' => Auth::guard('staff')->user(),
             'allowedModules' => UserRole::modulesFor(Auth::guard('staff')->user()),
+            'dashboard' => DashboardStats::overview(),
         ]);
     })->name('dashboard_staff');
 });
+
+// --- Live dashboard counts (polled by the Overview cards; any logged-in staff) ---
+Route::middleware('auth:staff')->get('/dashboard/stats', function () {
+    return response()->json(DashboardStats::stats())
+        ->header('Cache-Control', 'no-store');
+})->name('dashboard.stats');
+
+// Current client schedule / appointments (pending + ongoing), paginated.
+Route::middleware('auth:staff')->get('/dashboard/schedules', function (\Illuminate\Http\Request $request) {
+    return response()->json(DashboardStats::schedules(max(1, (int) $request->query('page', 1))))
+        ->header('Cache-Control', 'no-store');
+})->name('dashboard.schedules');
+
+// Month view for the trend chart: daily payment totals + daily done schedules.
+Route::middleware('auth:staff')->get('/dashboard/trend', function () {
+    return response()->json(DashboardStats::trend())
+        ->header('Cache-Control', 'no-store');
+})->name('dashboard.trend');
+
+// Done client schedule / appointments (done, awaiting payment), paginated.
+Route::middleware('auth:staff')->get('/dashboard/done', function (\Illuminate\Http\Request $request) {
+    return response()->json(DashboardStats::doneSchedules(max(1, (int) $request->query('page', 1))))
+        ->header('Cache-Control', 'no-store');
+})->name('dashboard.done');
+
+// Paid report (everything already paid), paginated, with the total amount.
+Route::middleware('auth:staff')->get('/dashboard/paid', function (\Illuminate\Http\Request $request) {
+    return response()->json(DashboardStats::paidSchedules(max(1, (int) $request->query('page', 1))))
+        ->header('Cache-Control', 'no-store');
+})->name('dashboard.paid');
 
 // --- Clients (any authenticated staff member, admin or staff role) ---
 // Previously unauthenticated: client PII (name, DOB, phone, address, photo)
@@ -73,6 +108,9 @@ Route::middleware(['auth:staff', 'user_type:staff'])->group(function () {
 Route::middleware(['auth:staff', 'module:clients'])->group(function () {
     Route::get('/clients', [ClientController::class, 'index'])->name('clients.index');
     Route::post('/clients', [ClientController::class, 'store'])->name('clients.store');
+    // One client as JSON (the dashboard opens a client's service record from a schedule row).
+    Route::get('/clients/{client}', fn (Client $client) => response()->json($client))
+        ->whereNumber('client')->name('clients.show');
     Route::put('/clients/{client}', [ClientController::class, 'update'])->name('clients.update');
     Route::patch('/clients/{client}/toggle-status', [ClientController::class, 'toggleStatus'])->name('clients.toggle_status');
     Route::delete('/clients/{client}', [ClientController::class, 'destroy'])->name('clients.destroy');
@@ -87,6 +125,7 @@ Route::middleware(['auth:staff', 'module:clients'])->group(function () {
     Route::get('/schedule-staff', [ClientScheduleController::class, 'staffOptions'])->name('schedules.staff');
     Route::patch('/clients/{client}/schedule-items/{itemSchedule}', [ClientScheduleController::class, 'updateItem'])->name('clients.schedule_items.update');
     Route::patch('/clients/{client}/schedule-products/{productSchedule}', [ClientScheduleController::class, 'updateProduct'])->name('clients.schedule_products.update');
+    Route::post('/clients/{client}/payments', [ClientScheduleController::class, 'pay'])->name('clients.payments.store');
     Route::patch('/clients/{client}/bundle-schedule-lines/{bundleLine}', [ClientScheduleController::class, 'updateBundleLine'])->name('clients.bundle_lines.update');
     Route::patch('/clients/{client}/bundle-schedules/{bundleSchedule}/pay', [ClientScheduleController::class, 'payBundle'])->name('clients.bundle_schedules.pay');
     Route::patch('/clients/{client}/package-records/{packageRecord}/pay', [ClientScheduleController::class, 'payPackage'])->name('clients.package_records.pay');

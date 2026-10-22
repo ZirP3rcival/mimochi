@@ -290,13 +290,7 @@ class ClientScheduleController extends Controller
 
         $this->assertPayable($bundleSchedule, 'bundle');
 
-        DB::transaction(function () use ($bundleSchedule) {
-            foreach ($bundleSchedule->lines()->get() as $line) {
-                $line->forceFill(['status' => 'paid'])->saveQuietly();
-            }
-
-            $bundleSchedule->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
-        });
+        DB::transaction(fn () => $this->settleBundle($bundleSchedule));
 
         return $this->updated($client);
     }
@@ -314,15 +308,60 @@ class ClientScheduleController extends Controller
 
         $this->assertPayable($packageRecord, 'package');
 
-        DB::transaction(function () use ($packageRecord) {
-            foreach ($packageRecord->sessions()->where('is_free', false)->get() as $session) {
-                $session->forceFill(['status' => 'paid'])->saveQuietly();
-            }
-
-            $packageRecord->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
-        });
+        DB::transaction(fn () => $this->settlePackage($packageRecord));
 
         return $this->updated($client);
+    }
+
+    /**
+     * Pay several records of one client at once (dashboard / service record
+     * payment window). All or nothing: if one record can't be paid, none are.
+     *
+     * POST /clients/{client}/payments
+     * body: { items: [{ type: 'item'|'bundle'|'package'|'product', id }, ...] }
+     */
+    public function pay(Request $request, Client $client)
+    {
+        $validated = $request->validate([
+            'items'        => 'required|array|min:1',
+            'items.*.type' => 'required|string|in:item,bundle,package,product',
+            'items.*.id'   => 'required|integer',
+        ]);
+
+        $entries = collect($validated['items'])
+            ->unique(fn ($entry) => $entry['type'].'-'.$entry['id'])
+            ->values();
+
+        DB::transaction(function () use ($client, $entries) {
+            foreach ($entries as $index => $entry) {
+                $model = match ($entry['type']) {
+                    'item'    => ClientItemSchedule::class,
+                    'bundle'  => ClientBundleSchedule::class,
+                    'package' => ClientPackageRecord::class,
+                    'product' => ClientProductSchedule::class,
+                };
+
+                $record = $model::where('client_id', $client->id)->find($entry['id']);
+
+                if (! $record) {
+                    throw ValidationException::withMessages([
+                        "items.{$index}.id" => "The selected {$entry['type']} no longer exists.",
+                    ]);
+                }
+
+                match ($entry['type']) {
+                    'item'    => $this->markPaid($record),
+                    'bundle'  => $this->settleBundle($record),
+                    'package' => $this->settlePackage($record),
+                    'product' => $this->settleProduct($record),
+                };
+            }
+        });
+
+        return response()->json([
+            'message'  => 'Payment recorded.',
+            'bookings' => $this->bookings($client),
+        ]);
     }
 
     /**
@@ -508,6 +547,40 @@ class ClientScheduleController extends Controller
         $this->assertPayable($row, 'service');
 
         $row->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+    }
+
+    /** Pay a Done bundle: the bundle and all of its lines become 'paid'. */
+    private function settleBundle(ClientBundleSchedule $bundleSchedule): void
+    {
+        $this->assertPayable($bundleSchedule, 'bundle');
+
+        foreach ($bundleSchedule->lines()->get() as $line) {
+            $line->forceFill(['status' => 'paid'])->saveQuietly();
+        }
+
+        $bundleSchedule->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+    }
+
+    /** Pay a Done package card: the card and its paid sessions become 'paid'. */
+    private function settlePackage(ClientPackageRecord $packageRecord): void
+    {
+        $this->assertPayable($packageRecord, 'package');
+
+        foreach ($packageRecord->sessions()->where('is_free', false)->get() as $session) {
+            $session->forceFill(['status' => 'paid'])->saveQuietly();
+        }
+
+        $packageRecord->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
+    }
+
+    /** Pay a product: sold, not scheduled, so it can be paid at any time. */
+    private function settleProduct(ClientProductSchedule $product): void
+    {
+        if ($product->status === 'paid') {
+            throw ValidationException::withMessages(['paid' => 'This product has already been paid.']);
+        }
+
+        $product->forceFill(['status' => 'paid', 'done_at' => now()])->saveQuietly();
     }
 
     /**

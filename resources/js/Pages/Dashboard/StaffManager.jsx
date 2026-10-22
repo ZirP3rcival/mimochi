@@ -18,6 +18,7 @@ const EMPTY_FORM = {
     position_id: '',
     available: true,
     can_login: true,
+    salary_rate: '',
 };
 
 const inputCls = 'w-full p-2.5 border border-gray-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-[rgb(240,136,176)]';
@@ -46,6 +47,9 @@ function SectionTitle({ children }) {
 // types or pastes. Phone keeps + - ( ) and spaces; ID numbers keep - and spaces.
 const digitsOnlyPhone = (v) => v.replace(/[^0-9+\-()\s]/g, '');
 const digitsOnlyId = (v) => v.replace(/[^0-9\-\s]/g, '');
+// Money: digits and one decimal point, at most 2 decimals.
+const moneyOnly = (v) => v.replace(/[^0-9.]/g, '').replace(/^(\d*\.?\d{0,2}).*$/, '$1');
+const formatPeso = (n) => `₱${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const formatDate = (value) => {
     if (!value) return null;
@@ -262,6 +266,7 @@ export default function StaffManager({ staffList: initialStaff = [], currentStaf
                 position_id: staffMember.position_id ? String(staffMember.position_id) : '',
                 available: staffMember.available !== false && staffMember.available !== 0,
                 can_login: staffMember.can_login !== false && staffMember.can_login !== 0,
+                salary_rate: staffMember.salary_rate != null && Number(staffMember.salary_rate) > 0 ? String(staffMember.salary_rate) : '',
             });
             clearPhotoState(staffMember.photo_path);
         } else if (actionType === 'create') {
@@ -498,6 +503,7 @@ export default function StaffManager({ staffList: initialStaff = [], currentStaf
             ['User Role', roleLabel(selectedStaff)],
             ['Position', positionLabel(selectedStaff)],
             ['Available', selectedStaff.available ? 'Yes' : 'No'],
+            ['Salary Rate', selectedStaff.salary_rate != null ? formatPeso(selectedStaff.salary_rate) : null],
             ['System Login', selectedStaff.can_login === false ? 'No' : 'Yes'],
         ]
         : [];
@@ -807,6 +813,23 @@ export default function StaffManager({ staffList: initialStaff = [], currentStaf
                                         {data.available ? 'Available' : 'Not available'}
                                     </label>
                                 </Field>
+                                {/* Salary rate: green panel, saved in staff.salary_rate */}
+                                <div className="rounded-xl bg-green-50 border border-green-200 p-3">
+                                    <label className="block text-xs font-semibold text-green-800 mb-1.5">Salary Rate</label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-green-700">₱</span>
+                                        <input
+                                            type="text"
+                                            inputMode="decimal"
+                                            value={data.salary_rate}
+                                            onChange={e => setData('salary_rate', moneyOnly(e.target.value))}
+                                            placeholder="0.00"
+                                            className={`${inputCls} pl-7 bg-white border-green-200 focus:ring-green-500`}
+                                        />
+                                    </div>
+                                    <p className="text-[10px] text-green-700 mt-1">Salary rate in pesos.</p>
+                                    {fieldErrors.salary_rate && <span className="text-xs text-red-500">{fieldErrors.salary_rate}</span>}
+                                </div>
                                 {isUpdateMode && (
                                     <Field label="Status" hint="Use the enable/disable icon in the list to change this.">
                                         <input type="text" readOnly value={selectedStaff.active ? 'Active' : 'Disabled'} className="w-full p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-500 cursor-not-allowed outline-none" />
