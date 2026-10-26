@@ -161,9 +161,22 @@ export default function ReportsManager() {
     const [busy, setBusy] = useState(false);
     const [rateDraft, setRateDraft] = useState({}); // staff_id -> typed DR
 
+    const sheetRef = useRef(null);
+
+    // Calendar dropdown: opened by the calendar button, closed by an outside click / Esc.
     const [calOpen, setCalOpen] = useState(false);
     const calRef = useRef(null);
-    const sheetRef = useRef(null);
+    useEffect(() => {
+        if (!calOpen) return undefined;
+        const onDown = (e) => { if (calRef.current && !calRef.current.contains(e.target)) setCalOpen(false); };
+        const onKey = (e) => { if (e.key === 'Escape') setCalOpen(false); };
+        document.addEventListener('mousedown', onDown);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDown);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [calOpen]);
     const singleDay = range.from === range.to;
 
     const load = useCallback(async () => {
@@ -181,27 +194,15 @@ export default function ReportsManager() {
 
     useEffect(() => { load(); }, [load]);
 
-    // close the calendar dropdown on outside click or Escape
-    useEffect(() => {
-        if (!calOpen) return undefined;
-        const onDown = (e) => { if (calRef.current && !calRef.current.contains(e.target)) setCalOpen(false); };
-        const onKey = (e) => { if (e.key === 'Escape') setCalOpen(false); };
-        document.addEventListener('mousedown', onDown);
-        document.addEventListener('keydown', onKey);
-        return () => {
-            document.removeEventListener('mousedown', onDown);
-            document.removeEventListener('keydown', onKey);
-        };
-    }, [calOpen]);
-
     // ── range selection ──
     const applyMode = (next) => {
         const focus = range.from;
         setAnchor(null);
         setMode(next);
         if (next === 'daily') setRange({ from: focus, to: focus });
-        if (next === '15') setRange({ from: monthStart(focus), to: `${focus.slice(0, 7)}-15` }); // 1st – 15th of the focused month
-        if (next === '30') setRange({ from: `${focus.slice(0, 7)}-16`, to: monthEnd(focus) }); // 16th – end of month (29/30/31)
+        // "15" and "30" are the two semi-monthly cut-offs: 1st-15th and 16th-end of month.
+        if (next === '15') setRange({ from: monthStart(focus), to: `${focus.slice(0, 7)}-15` });
+        if (next === '30') setRange({ from: `${focus.slice(0, 7)}-16`, to: monthEnd(focus) });
         if (next === 'monthly') setRange({ from: monthStart(focus), to: monthEnd(focus) });
         setMonth(parse(focus));
     };
@@ -225,7 +226,6 @@ export default function ReportsManager() {
         setMode('daily');
         setRange({ from: today, to: today });
         setMonth(parse(today));
-        setCalOpen(false);
     };
 
     // ── expenses / daily rate ──
@@ -294,12 +294,13 @@ export default function ReportsManager() {
         setTimeout(() => win.print(), 300);
     };
 
-    const modeBtn = (key, text) => (
+    const modeBtn = (key, text, title) => (
         <button
             key={key}
             type="button"
+            title={title}
             onClick={() => applyMode(key)}
-            className={`min-w-[4.5rem] px-4 py-2 rounded-lg text-xs font-semibold transition ${
+            className={`min-w-[3.5rem] px-4 py-2 rounded-lg text-xs font-semibold transition ${
                 mode === key ? 'bg-[rgb(240,136,176)] text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
         >
@@ -311,60 +312,57 @@ export default function ReportsManager() {
     const summary = report?.summary;
 
     return (
-        <div className="w-full min-h-[calc(100vh-6rem)] bg-gray-50 flex flex-col gap-3 p-2 sm:p-4">
-            {/* ── TOOLBAR: calendar dropdown trigger, range buttons, today, print ── */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-3 flex flex-wrap items-center gap-2">
-                <div className="relative" ref={calRef}>
-                    <button
-                        type="button"
-                        onClick={() => setCalOpen((o) => !o)}
-                        aria-label="Open report calendar"
-                        aria-haspopup="dialog"
-                        aria-expanded={calOpen}
-                        title="Report calendar"
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center border transition ${
-                            calOpen
-                                ? 'bg-[rgb(240,136,176)] text-white border-transparent shadow-sm'
-                                : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                        }`}
-                    >
-                        <CalendarDays className="w-4 h-4" />
-                    </button>
+        <div className="w-full min-h-[calc(100vh-6rem)] bg-gray-50 p-2 sm:p-4">
+            {/* ── the daily sales sheet fills the whole display area ── */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 min-w-0 flex flex-col min-h-[calc(100vh-8rem)]">
+                {/* toolbar: calendar dropdown, period buttons, today, print */}
+                <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 p-3">
+                    <div className="relative" ref={calRef}>
+                        <button
+                            type="button"
+                            onClick={() => setCalOpen((o) => !o)}
+                            aria-haspopup="dialog"
+                            aria-expanded={calOpen}
+                            title="Report calendar"
+                            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition ${
+                                calOpen ? 'border-[rgb(240,136,176)] bg-pink-50 text-gray-800' : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                            }`}
+                        >
+                            <CalendarDays className="w-4 h-4 text-[rgb(240,136,176)]" />
+                            <span>{label}</span>
+                        </button>
 
-                    {calOpen && (
-                        <div role="dialog" aria-label="Report calendar" className="absolute left-0 top-full mt-2 z-30 w-72 bg-white rounded-xl shadow-lg border border-gray-100 p-4 space-y-3">
-                            <p className="text-[11px] text-gray-400">
-                                {anchor
-                                    ? 'Now click an end date (or the same date for one day).'
-                                    : 'Click a date for one day, or click a start and an end date for a range.'}
-                            </p>
-                            <Calendar month={month} onMonth={setMonth} from={range.from} to={range.to} onPick={pickDate} />
-                        </div>
-                    )}
+                        {calOpen && (
+                            <div role="dialog" aria-label="Report calendar" className="absolute left-0 top-full z-30 mt-2 w-72 rounded-xl border border-gray-100 bg-white p-4 shadow-lg">
+                                <h3 className="text-sm font-bold text-gray-800">Report Calendar</h3>
+                                <p className="mb-3 mt-0.5 text-[11px] text-gray-400">
+                                    {anchor ? 'Now click an end date for a range.' : 'Click a date for one day, or click a start and an end date for a range.'}
+                                </p>
+                                <Calendar month={month} onMonth={setMonth} from={range.from} to={range.to} onPick={pickDate} />
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5">
+                        {modeBtn('daily', 'Daily', 'One day')}
+                        {modeBtn('15', '15', '1st to 15th of the month')}
+                        {modeBtn('30', '30', '16th to end of the month')}
+                        {modeBtn('monthly', 'Monthly', 'Whole month')}
+                    </div>
+
+                    <div className="ml-auto flex gap-2">
+                        <button type="button" onClick={goToday} className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition">Today</button>
+                        <button
+                            type="button"
+                            onClick={printSheet}
+                            disabled={loading || !report}
+                            className="px-4 py-2 bg-[rgb(240,136,176)] hover:bg-[rgb(225,120,160)] disabled:bg-gray-300 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow-sm"
+                        >
+                            <Printer className="w-3.5 h-3.5" /> Print
+                        </button>
+                    </div>
                 </div>
 
-                <div className="flex flex-wrap gap-1.5">
-                    {modeBtn('daily', 'Daily')}
-                    {modeBtn('15', '15')}
-                    {modeBtn('30', '30')}
-                    {modeBtn('monthly', 'Monthly')}
-                </div>
-
-                <div className="flex gap-2 ml-auto">
-                    <button type="button" onClick={goToday} className="px-4 py-2 border border-gray-200 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 transition">Today</button>
-                    <button
-                        type="button"
-                        onClick={printSheet}
-                        disabled={loading || !report}
-                        className="px-4 py-2 bg-[rgb(240,136,176)] hover:bg-[rgb(225,120,160)] disabled:bg-gray-300 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition shadow-sm"
-                    >
-                        <Printer className="w-3.5 h-3.5" /> Print
-                    </button>
-                </div>
-            </div>
-
-            {/* ── the daily sales sheet (fills the whole display area) ── */}
-            <div className="flex-1 flex flex-col bg-white rounded-xl shadow-sm border border-gray-100 min-w-0 overflow-hidden">
                 <style>{SHEET_CSS}</style>
 
                 {error && (
@@ -374,8 +372,8 @@ export default function ReportsManager() {
                 {loading && !report ? (
                     <div className="text-center py-16 text-gray-400 text-sm">Loading report…</div>
                 ) : report ? (
-                    <div className="flex-1 flex flex-col overflow-x-auto custom-scrollbar" style={{ opacity: loading ? 0.6 : 1 }}>
-                        <div className="rs flex-1" ref={sheetRef}>
+                    <div className="flex-1 overflow-x-auto custom-scrollbar" style={{ opacity: loading ? 0.6 : 1 }}>
+                        <div className="rs" ref={sheetRef} style={{ minWidth: 900, minHeight: '100%' }}>
                             <h2 className="rs-title">DAILY SALES</h2>
                             <p className="rs-sub">{label}{!singleDay && ` · ${report.range.days} days`}</p>
 

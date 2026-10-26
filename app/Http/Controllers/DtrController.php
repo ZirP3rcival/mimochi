@@ -24,6 +24,7 @@ class DtrController extends Controller
     private const LATE_AFTER = '10:00:00';      // 10:00 AM
     private const OVERTIME_AFTER = '20:00:00';  // 8:00 PM (end of the 10:00 AM - 8:00 PM schedule)
     private const TIME_IN_CUTOFF = '20:00:00'; // no new time in at or after this
+    private const HALF_DAY_START = '15:00:00'; // half day schedule: 3:00 PM - 8:00 PM (late + work time count from here)
 
     /** Authoritative server time. The page ticks from this, not from the PC clock. */
     public function time(): JsonResponse
@@ -64,11 +65,13 @@ class DtrController extends Controller
             ->whereDate('record_date', $this->now()->toDateString());
 
         $latest = (clone $q)->latest('id')->first();
+        $first = (clone $q)->orderBy('id')->first();
 
         return response()->json([
             'time_in'  => $latest?->time_in,
             'time_out' => $latest?->time_out,
             'punches'  => $q->count(),
+            'day_type' => $first?->day_type,   // 'full' | 'half' once the day has started, else null
         ]);
     }
 
@@ -93,9 +96,25 @@ class DtrController extends Controller
             return response()->json(['message' => 'Already timed in at ' . $this->fmt($open->time_in) . '. Time out first.'], 422);
         }
 
-        // Late is measured against 10:00 AM on the first time in of the day only.
-        $isFirstToday = ! DailyTimeRecord::where('staff_id', $data['staff_id'])
-            ->whereDate('record_date', $today)->exists();
+        // The day is either a full day (10:00 AM - 8:00 PM) or a half day (3:00 PM - 8:00 PM).
+        // It is chosen on the first time in and cannot change for the rest of the day.
+        $firstToday = DailyTimeRecord::where('staff_id', $data['staff_id'])
+            ->whereDate('record_date', $today)->orderBy('id')->first();
+
+        $requestedType = $request->boolean('half_day') ? 'half' : 'full';
+
+        if ($firstToday && $firstToday->day_type !== $requestedType) {
+            return response()->json([
+                'message' => 'Today is already recorded as a ' . $firstToday->day_type . ' day.',
+            ], 422);
+        }
+
+        $dayType = $firstToday?->day_type ?? $requestedType;
+        $isFirstToday = ! $firstToday;
+
+        // Late is measured once per day, on the first time in only:
+        // from 10:00 AM (full day) or 3:00 PM (half day).
+        $lateFrom = $dayType === 'half' ? self::HALF_DAY_START : self::LATE_AFTER;
 
         $path = $this->storeImage($request, $data['staff_id'], 'in', $now);
 
@@ -104,7 +123,8 @@ class DtrController extends Controller
             'staff_name'    => $data['staff']->staff_name,
             'record_date'   => $today,
             'time_in'       => $now->format('H:i:s'),
-            'late'          => $isFirstToday ? $this->minutesAfter($now, self::LATE_AFTER) : 0,
+            'day_type'      => $dayType,
+            'late'          => $isFirstToday ? $this->minutesAfter($now, $lateFrom) : 0,
             'time_in_image' => $path,
             'ip_address'    => $request->ip(),
         ]);
@@ -117,7 +137,7 @@ class DtrController extends Controller
             ->update(['undertime' => 0]);
 
         return response()->json([
-            'message' => 'Time in recorded at ' . $this->fmt($rec->time_in) . '.'
+            'message' => 'Time in recorded at ' . $this->fmt($rec->time_in) . ($dayType === 'half' ? ' (Half day).' : '.')
                 . ($rec->late > 0 ? " Late by {$rec->late} min." : ''),
             'time_in' => $rec->time_in,
         ]);
@@ -143,7 +163,8 @@ class DtrController extends Controller
             'time_out'       => $now->format('H:i:s'),
             'overtime'       => $this->minutesAfter($now, self::OVERTIME_AFTER),   // after 8:00 PM
             'undertime'      => $this->minutesBefore($now, self::OVERTIME_AFTER),  // before 8:00 PM
-            'work_minutes'   => $this->minutesWorked($rec->time_in, $now),         // time in -> time out
+            'work_minutes'   => $this->minutesWorked($rec->time_in, $now,          // time in -> time out
+                $rec->day_type === 'half' ? self::HALF_DAY_START : null),   // half day: counted from 3:00 PM
             'time_out_image' => $this->storeImage($request, $data['staff_id'], 'out', $now),
         ]);
 
@@ -163,6 +184,7 @@ class DtrController extends Controller
         $data = $request->validate([
             'staff_id' => ['required', 'integer'],
             'image'    => ['required', 'file', 'mimes:jpg,jpeg,png', 'max:4096'],
+            'half_day' => ['sometimes', 'boolean'],
         ]);
 
         $staff = Staff::whereKey($data['staff_id'])
@@ -208,10 +230,15 @@ class DtrController extends Controller
         return $now->lessThan($limit) ? (int) floor($now->diffInMinutes($limit, true)) : 0;
     }
 
-    /** Whole minutes from $timeIn (H:i:s, same day) to $now. */
-    private function minutesWorked(string $timeIn, Carbon $now): int
+    /**
+     * Whole minutes from $timeIn (H:i:s, same day) to $now. With $notBefore
+     * (half day = 3:00 PM) the count starts at the later of the two, so
+     * arriving before 3:00 PM does not add work time.
+     */
+    private function minutesWorked(string $timeIn, Carbon $now, ?string $notBefore = null): int
     {
-        $start = $now->copy()->setTimeFromTimeString($timeIn);
+        $startAt = ($notBefore !== null && $notBefore > $timeIn) ? $notBefore : $timeIn;
+        $start = $now->copy()->setTimeFromTimeString($startAt);
 
         return max(0, (int) floor($start->diffInMinutes($now, true)));
     }

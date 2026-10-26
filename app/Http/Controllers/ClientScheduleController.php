@@ -10,6 +10,7 @@ use App\Models\ClientBundleScheduleItem;
 use App\Models\ClientItemSchedule;
 use App\Models\ClientPackageRecord;
 use App\Models\ClientPackageSession;
+use App\Models\ClientPayment;
 use App\Models\ClientProductSchedule;
 use App\Models\Package;
 use App\Models\Product;
@@ -17,6 +18,7 @@ use App\Models\SaleItem;
 use App\Models\Staff;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\Rule;
@@ -314,11 +316,15 @@ class ClientScheduleController extends Controller
     }
 
     /**
-     * Pay several records of one client at once (dashboard / service record
-     * payment window). All or nothing: if one record can't be paid, none are.
+     * Pay several records of one client at once (dashboard payment window).
+     * All or nothing: if one record can't be paid, or cash + online doesn't
+     * equal the total, nothing is paid. The payment is stored in
+     * client_payments (cash / online split) with one client_payment_items row
+     * per record.
      *
      * POST /clients/{client}/payments
-     * body: { items: [{ type: 'item'|'bundle'|'package'|'product', id }, ...] }
+     * body: { items: [{ type: 'item'|'bundle'|'package'|'product', id }, ...],
+     *         cash_amount, online_amount }
      */
     public function pay(Request $request, Client $client)
     {
@@ -326,13 +332,17 @@ class ClientScheduleController extends Controller
             'items'        => 'required|array|min:1',
             'items.*.type' => 'required|string|in:item,bundle,package,product',
             'items.*.id'   => 'required|integer',
+            'cash_amount'   => 'required|numeric|min:0|max:99999999.99',
+            'online_amount' => 'required|numeric|min:0|max:99999999.99',
         ]);
 
         $entries = collect($validated['items'])
             ->unique(fn ($entry) => $entry['type'].'-'.$entry['id'])
             ->values();
 
-        DB::transaction(function () use ($client, $entries) {
+        DB::transaction(function () use ($client, $entries, $validated) {
+            $lines = [];
+
             foreach ($entries as $index => $entry) {
                 $model = match ($entry['type']) {
                     'item'    => ClientItemSchedule::class,
@@ -349,6 +359,24 @@ class ClientScheduleController extends Controller
                     ]);
                 }
 
+                // Amount and name as they are at payment time (price snapshots on the row).
+                $lines[] = [
+                    'record_type' => $entry['type'],
+                    'record_id'   => $record->id,
+                    'record_name' => match ($entry['type']) {
+                        'item'    => $record->item_name,
+                        'bundle'  => $record->bundle_name,
+                        'package' => $record->package_name,
+                        'product' => $record->product_name,
+                    },
+                    'amount' => match ($entry['type']) {
+                        'item'    => (float) $record->price,
+                        'bundle'  => (float) $record->bundle_price,
+                        'package' => (float) $record->package_price,
+                        'product' => (float) $record->total,
+                    },
+                ];
+
                 match ($entry['type']) {
                     'item'    => $this->markPaid($record),
                     'bundle'  => $this->settleBundle($record),
@@ -356,6 +384,29 @@ class ClientScheduleController extends Controller
                     'product' => $this->settleProduct($record),
                 };
             }
+
+            // Cash + online must equal the total (compared in centavos to avoid float drift).
+            $totalCents  = (int) round(collect($lines)->sum('amount') * 100);
+            $cashCents   = (int) round((float) $validated['cash_amount'] * 100);
+            $onlineCents = (int) round((float) $validated['online_amount'] * 100);
+
+            if ($cashCents + $onlineCents !== $totalCents) {
+                // Thrown inside the transaction, so the records above stay unpaid.
+                throw ValidationException::withMessages([
+                    'cash_amount' => 'Cash and online payments must add up to the total amount of ₱' . number_format($totalCents / 100, 2) . '.',
+                ]);
+            }
+
+            $payment = ClientPayment::create([
+                'client_id'     => $client->id,
+                'staff_id'      => Auth::guard('staff')->id(),
+                'cash_amount'   => $cashCents / 100,
+                'online_amount' => $onlineCents / 100,
+                'total_amount'  => $totalCents / 100,
+                'paid_at'       => now(),
+            ]);
+
+            $payment->items()->createMany($lines);
         });
 
         return response()->json([

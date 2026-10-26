@@ -20,6 +20,9 @@ return new class extends Migration
 
             // Date and times are stored separately, always from the SERVER clock.
             $table->date('record_date');
+
+            // 'full' = 10:00 AM - 8:00 PM schedule, 'half' = 3:00 PM - 8:00 PM (chosen on the day's first time in).
+            $table->string('day_type', 10)->default('full');
             $table->time('time_in')->nullable();
             $table->time('time_out')->nullable();
 
@@ -29,6 +32,10 @@ return new class extends Migration
             // undertime = minutes BEFORE 8:00 PM when the staff times out early.
             $table->unsignedInteger('undertime')->default(0);
 
+            // Minutes worked on this punch (time_out - time_in), saved at time out.
+            // A day's total is SUM(work_minutes) per staff and record_date.
+            $table->unsignedInteger('work_minutes')->default(0);
+
             // Paths relative to /public, e.g. uploads/dtr/2026-10-18/5_in_082501.jpg
             $table->string('time_in_image')->nullable();
             $table->string('time_out_image')->nullable();
@@ -36,8 +43,9 @@ return new class extends Migration
             $table->string('ip_address', 45)->nullable();
             $table->timestamps();
 
-            // One DTR row per staff per day.
-            $table->unique(['staff_id', 'record_date']);
+            // One row per punch (time in + its time out). A staff member can
+            // have several rows per day.
+            $table->index(['staff_id', 'record_date']);
         });
     }
 

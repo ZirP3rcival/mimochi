@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class DailyTimeRecord extends Model
 {
     protected $fillable = [
-        'staff_id', 'staff_name', 'record_date', 'time_in', 'time_out', 'late', 'overtime', 'undertime', 'work_minutes',
+        'staff_id', 'staff_name', 'record_date', 'time_in', 'time_out', 'late', 'overtime', 'undertime', 'work_minutes', 'day_type',
         'time_in_image', 'time_out_image', 'ip_address',
     ];
 

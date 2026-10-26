@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import ClientRecord from './ClientRecord';
-import { Users, CalendarCheck2, UserCheck, PackageCheck, CalendarClock, CalendarDaysIcon, Eye, CreditCard, FileText, Printer, X } from 'lucide-react';
+import { printReceipt } from './receipt';
+import ReceiptPreview from './ReceiptPreview';
+import { Users, CalendarCheck2, UserCheck, PackageCheck, CalendarClock, CalendarDaysIcon, Banknote, Eye, CreditCard, FileText, Printer, Receipt, Smartphone, Ticket, Trash2, X } from 'lucide-react';
 
 // ---------------------------------------------------------------------------
 // Mock data. Swap these for real values by passing a `data` prop shaped the
@@ -569,21 +571,56 @@ function xsrfToken() {
   return m ? decodeURIComponent(m[1]) : '';
 }
 
-// Payment window: the ticked done records with their amounts and the total.
-// Rows can be removed from the list; Submit payment marks them all as paid.
+// Light tint of a hex colour over white, as a solid colour (for sticky rows).
+function solidTint(hex, alpha) {
+  const c = hex.replace('#', '');
+  const mix = (i) => Math.round(255 + (parseInt(c.substring(i, i + 2), 16) - 255) * alpha);
+  return `rgb(${mix(0)}, ${mix(2)}, ${mix(4)})`;
+}
+const toCents = (v) => Math.round((parseFloat(v) || 0) * 100);
+const moneyInput = (v) => v.replace(/[^0-9.]/g, '').replace(/^(\d*\.?\d{0,2}).*$/, '$1');
+
+// Payment window: the ticked done records with their amounts, the total, and
+// how it is paid (cash and/or online). Submit payment stays disabled until
+// cash + online equals the total; then every record is marked paid and the
+// split is stored in client_payments.
 function PaymentModal({ client, clientId, rows, color, onRemove, onClose, onPaid }) {
   const [busy, setBusy] = useState(false);
+  // after the payment is submitted: Receipt button enabled, window closable only once printed
+  const [submitted, setSubmitted] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [printing, setPrinting] = useState(false);
+  const [printed, setPrinted] = useState(false);
   const [error, setError] = useState('');
-  const total = rows.reduce((sum, r) => sum + Number(r.price ?? 0), 0);
+  const [cash, setCash] = useState('');
+  const [online, setOnline] = useState('');
+  // rows paid with a voucher (by row key): their amount is not collected as cash / online
+  const [voucherKeys, setVoucherKeys] = useState({});
+
+  const rowCents = (r) => Math.round(Number(r.price ?? 0) * 100);
+  const totalCents = rows.reduce((sum, r) => sum + rowCents(r), 0);
+  const voucherRows = rows.filter((r) => voucherKeys[r.key]);
+  const voucherCents = voucherRows.reduce((sum, r) => sum + rowCents(r), 0);
+  const dueCents = totalCents - voucherCents; // what cash + online must cover
+  const due = dueCents / 100;
+  const receivedCents = toCents(cash) + toCents(online);
+  const diff = dueCents - receivedCents; // >0 still to collect, <0 too much
+  const toggleVoucher = (key) => { setVoucherKeys((prev) => ({ ...prev, [key]: !prev[key] })); setError(''); };
+  const balanced = totalCents > 0 && diff === 0;
+  const canClose = !busy && !printing && !previewing && (!submitted || printed);
 
   useEffect(() => {
-    const onKey = (e) => e.key === 'Escape' && !busy && onClose();
+    const onKey = (e) => e.key === 'Escape' && canClose && onClose(submitted);
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [onClose, busy]);
+  }, [onClose, canClose, submitted]);
 
   async function submit() {
     if (busy || rows.length === 0) return;
+    if (!balanced) {
+      setError('Cash and online payments must add up to the total amount.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -598,6 +635,12 @@ function PaymentModal({ client, clientId, rows, color, onRemove, onClose, onPaid
         },
         body: JSON.stringify({
           items: rows.map((r) => ({ type: String(r.type).toLowerCase(), id: Number(String(r.key).split('-').pop()) })),
+          cash_amount: (toCents(cash) / 100).toFixed(2),
+          online_amount: (toCents(online) / 100).toFixed(2),
+          ...(voucherCents > 0 ? {
+            voucher_amount: (voucherCents / 100).toFixed(2),
+            voucher_items: voucherRows.map((r) => ({ type: String(r.type).toLowerCase(), id: Number(String(r.key).split('-').pop()) })),
+          } : {}),
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -605,6 +648,8 @@ function PaymentModal({ client, clientId, rows, color, onRemove, onClose, onPaid
         const first = body?.errors ? Object.values(body.errors).flat()[0] : null;
         throw new Error(first || body?.message || 'Payment could not be recorded.');
       }
+      setSubmitted(true);
+      setBusy(false);
       onPaid();
     } catch (e) {
       setError(e.message || 'Payment could not be recorded.');
@@ -612,28 +657,54 @@ function PaymentModal({ client, clientId, rows, color, onRemove, onClose, onPaid
     }
   }
 
+  async function print() {
+    if (!submitted || printing) return;
+    setPrinting(true);
+    await printReceipt({
+      items: rows.map((r) => ({ name: r.service, amount: r.price })),
+      total: due,
+      voucher: voucherCents / 100,
+    });
+    setPrinting(false);
+    setPrinted(true);
+    setPreviewing(false);
+  }
+
+  const options = [
+    { key: 'cash', label: 'Cash', Icon: Banknote, value: cash, set: setCash, other: setOnline },
+    { key: 'online', label: 'Online', Icon: Smartphone, value: online, set: setOnline, other: setCash },
+  ];
+
+  let statusText = 'Enter the cash and/or online amount received.';
+  let statusColor = '#737373';
+  if (receivedCents > 0 && diff > 0) { statusText = `Remaining ${peso(diff / 100)}`; statusColor = '#b45309'; }
+  else if (diff < 0) { statusText = `Over by ${peso(-diff / 100)}`; statusColor = '#dc2626'; }
+  else if (balanced) { statusText = voucherCents > 0 ? 'Voucher + Cash + Online matches the total amount.' : 'Cash + Online matches the total amount.'; statusColor = '#15803d'; }
+  if (submitted) { statusText = 'Payment recorded.'; statusColor = '#15803d'; }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={busy ? undefined : onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={canClose ? () => onClose(submitted) : undefined}>
       <div
         role="dialog"
         aria-modal="true"
-        className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-xl bg-white shadow-xl overflow-hidden"
+        className="flex max-h-[92vh] w-full max-w-xl flex-col rounded-xl bg-white shadow-xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3" style={{ backgroundColor: hexToRgba(color, 0.22) }}>
           <p className="text-sm font-semibold uppercase tracking-wide" style={{ color }}>Payment · {client}</p>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="Close" className="rounded p-1 hover:bg-white/60">
+          <button type="button" onClick={() => onClose(submitted)} disabled={!canClose} aria-label="Close" title={canClose ? 'Close' : 'Print the receipt first'} className="rounded p-1 hover:bg-white/60 disabled:cursor-not-allowed disabled:opacity-30">
             <X className="h-4 w-4" style={{ color }} />
           </button>
         </div>
 
-        <div className="overflow-auto custom-scrollbar">
+        {/* one table, so the total sits in the same column as the amounts */}
+        <div className="max-h-[40vh] overflow-auto custom-scrollbar">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-neutral-500" style={{ backgroundColor: hexToRgba(color, 0.09) }}>
                 <th className="px-4 py-2 font-medium">Service</th>
                 <th className="px-4 py-2 font-medium text-right">Amount</th>
-                <th className="px-2 py-2"><span className="sr-only">Remove</span></th>
+                <th className="w-20 px-2 py-2"><span className="sr-only">Voucher and remove</span></th>
               </tr>
             </thead>
             <tbody>
@@ -642,48 +713,160 @@ function PaymentModal({ client, clientId, rows, color, onRemove, onClose, onPaid
                   <td className="px-4 py-2.5 text-neutral-800">
                     {r.service}
                     {r.type && <span className="ml-2 text-[10px] font-medium uppercase tracking-wide text-neutral-400">{r.type}</span>}
+                    {voucherKeys[r.key] && <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide" style={{ color }}>Voucher</span>}
                   </td>
                   <td className="px-4 py-2.5 text-right font-medium text-neutral-800 whitespace-nowrap">{peso(r.price)}</td>
                   <td className="px-2 py-2.5 text-right">
-                    <button
-                      type="button"
-                      onClick={() => onRemove(r)}
-                      disabled={busy}
-                      title="Remove from payment"
-                      aria-label={`Remove ${r.service} from payment`}
-                      className="rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-40"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-end gap-0.5">
+                      {/* voucher payment: this service is covered by a voucher, not cash / online */}
+                      <button
+                        type="button"
+                        onClick={() => toggleVoucher(r.key)}
+                        disabled={busy || submitted}
+                        aria-pressed={Boolean(voucherKeys[r.key])}
+                        title={voucherKeys[r.key] ? 'Remove voucher from this service' : 'Pay this service with a voucher'}
+                        aria-label={`${voucherKeys[r.key] ? 'Remove voucher from' : 'Pay with voucher:'} ${r.service}`}
+                        className="rounded p-1 hover:bg-white/70 disabled:opacity-40"
+                        style={voucherKeys[r.key] ? { backgroundColor: color, color: '#FFFFFF' } : { color }}
+                      >
+                        <Ticket className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemove(r)}
+                        disabled={busy || submitted}
+                        title="Remove from payment"
+                        aria-label={`Remove ${r.service} from payment`}
+                        className="rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-40"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
             </tbody>
+            <tfoot className="sticky bottom-0">
+              {voucherCents > 0 && (
+                <tr style={{ backgroundColor: solidTint(color, 0.1) }}>
+                  <td className="px-4 pt-2 text-xs font-medium text-neutral-500">Voucher</td>
+                  <td className="px-4 pt-2 text-right text-sm font-semibold whitespace-nowrap" style={{ color }}>−{peso(voucherCents / 100)}</td>
+                  <td />
+                </tr>
+              )}
+              <tr style={{ backgroundColor: solidTint(color, 0.1), borderTop: `1px solid ${hexToRgba(color, 0.25)}` }}>
+                <td className="px-4 py-3 text-sm font-medium text-neutral-600">Total amount</td>
+                <td className="px-4 py-3 text-right text-xl font-bold whitespace-nowrap" style={{ color }}>{peso(due)}</td>
+                <td />
+              </tr>
+            </tfoot>
           </table>
         </div>
 
-        <div className="flex items-center justify-between px-4 py-3 text-sm" style={{ borderTop: `1px solid ${hexToRgba(color, 0.2)}`, backgroundColor: hexToRgba(color, 0.08) }}>
-          <span className="font-medium text-neutral-600">Total amount</span>
-          <span className="text-base font-semibold" style={{ color }}>{peso(total)}</span>
+        {/* payment options */}
+        <div className="px-4 pt-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">Payment options</p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {options.map(({ key, label, Icon, value, set, other }) => (
+              <div key={key} className="rounded-lg border p-3" style={{ borderColor: hexToRgba(color, 0.25) }}>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-neutral-700">
+                    <Icon className="h-4 w-4" style={{ color }} />
+                    {label}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => { set(due.toFixed(2)); other(''); setError(''); }}
+                    disabled={busy || submitted || due <= 0}
+                    className="text-[11px] font-semibold hover:underline disabled:opacity-40"
+                    style={{ color }}
+                  >
+                    Full amount
+                  </button>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-neutral-500">₱</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={value}
+                    onChange={(e) => { set(moneyInput(e.target.value)); setError(''); }}
+                    disabled={busy || submitted}
+                    placeholder="0.00"
+                    aria-label={`${label} amount`}
+                    className="w-full rounded-lg border border-neutral-200 py-2 pl-7 pr-3 text-right text-sm outline-none focus:ring-2"
+                    style={{ '--tw-ring-color': hexToRgba(color, 0.5) }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2 flex items-center justify-between text-xs">
+            <span className="font-medium" style={{ color: statusColor }}>{statusText}</span>
+            <span className="text-neutral-500">Received <strong className="text-neutral-800">{peso(receivedCents / 100)}</strong></span>
+          </div>
         </div>
 
-        {error && <p className="px-4 pt-3 text-sm text-red-600" role="alert">{error}</p>}
+        {error && <p className="px-4 pt-2 text-sm text-red-600" role="alert">{error}</p>}
 
-        <div className="flex justify-end gap-2 px-4 py-3">
-          <button type="button" onClick={onClose} disabled={busy} className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50 disabled:opacity-50">
-            Cancel
+        {submitted && !printed && (
+          <p role="status" className="px-4 pt-2 text-sm font-medium text-amber-700">
+            Payment submitted. Preview and print the receipt to close this window.
+          </p>
+        )}
+        {printed && (
+          <p role="status" className="px-4 pt-2 text-sm font-medium text-emerald-700">
+            Receipt printed. You can close this window.
+          </p>
+        )}
+
+        <div className="flex flex-wrap justify-end gap-2 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => onClose(submitted)}
+            disabled={!canClose}
+            className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {submitted ? 'Close' : 'Cancel'}
           </button>
           <button
             type="button"
             onClick={submit}
-            disabled={busy || rows.length === 0}
+            disabled={busy || !balanced || submitted}
+            title={balanced ? 'Record this payment' : 'Cash + Online must equal the total amount'}
             className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <CreditCard className="h-4 w-4" />
-            {busy ? 'Submitting…' : 'Submit payment'}
+            {busy ? 'Submitting…' : submitted ? 'Payment submitted ✓' : 'Submit payment'}
+          </button>
+          {/* Receipt: only enabled once the payment has been submitted */}
+          <button
+            type="button"
+            onClick={() => setPreviewing(true)}
+            disabled={!submitted || printing}
+            title={submitted ? 'Preview and print receipt (58 mm)' : 'Submit the payment first'}
+            aria-label="Preview and print receipt"
+            className="inline-flex items-center gap-1.5 rounded-lg border bg-white px-4 py-2 text-sm font-semibold transition-colors hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ color, borderColor: hexToRgba(color, 0.6) }}
+          >
+            <Receipt className="h-4 w-4" />
+            Receipt
           </button>
         </div>
       </div>
+
+      {previewing && (
+        <ReceiptPreview
+          items={rows.map((r) => ({ name: r.service, amount: r.price }))}
+          total={due}
+          voucher={voucherCents / 100}
+          color={color}
+          printing={printing}
+          onPrint={print}
+          onBack={() => setPreviewing(false)}
+        />
+      )}
     </div>
   );
 }
@@ -835,12 +1018,11 @@ function DonePanel({ rows, meta, onPage, onPaid }) {
               return next;
             });
           }}
-          onClose={() => setPaying(false)}
-          onPaid={() => {
+          onClose={(paid) => {
             setPaying(false);
-            setSelected({});
-            onPaid?.();
+            if (paid) setSelected({}); // paid records leave the list; keep ticks if the window was only cancelled
           }}
+          onPaid={() => onPaid?.()}
         />
       )}
       {showPaid && <PaidReportModal color={color} onClose={() => setShowPaid(false)} />}

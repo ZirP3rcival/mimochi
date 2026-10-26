@@ -140,6 +140,8 @@ function DtrModule() {
     const [busy, setBusy] = useState(false);
     // After a time in / time out the buttons stay disabled until a staff name is selected again.
     const [locked, setLocked] = useState(false);
+    // Half day: work schedule 3:00 PM - 8:00 PM instead of 10:00 AM - 8:00 PM (chosen on the day's first time in).
+    const [halfDay, setHalfDay] = useState(false);
     const [msg, setMsg] = useState(null); // { type: 'ok' | 'err', text }
 
     // staff list from DB
@@ -161,6 +163,7 @@ function DtrModule() {
         setLocked(false); // a (re)selected staff name enables the buttons again
         setMsg(null);
         setCamError('');
+        setHalfDay(false);
         if (!staffId) {
             stopCamera();
             setStatus({ time_in: null, time_out: null });
@@ -188,7 +191,12 @@ function DtrModule() {
         })();
 
         fetch(`/dtr/status?staff_id=${staffId}`, { headers: { Accept: 'application/json' } })
-            .then((r) => r.json()).then(setStatus).catch(() => {});
+            .then((r) => r.json())
+            .then((s) => {
+                setStatus(s);
+                if (s.day_type) setHalfDay(s.day_type === 'half'); // today's type is already fixed
+            })
+            .catch(() => {});
 
         return () => { cancelled = true; };
     }, [staffId, stopCamera]);
@@ -204,6 +212,7 @@ function DtrModule() {
         setMsg(null);
         setBusy(false);
         setLocked(false);
+        setHalfDay(false);
     }
 
     function captureBlob() {
@@ -224,6 +233,7 @@ function DtrModule() {
             const fd = new FormData();
             fd.append('staff_id', staffId);
             fd.append('image', blob, `${kind}.jpg`);
+            if (kind === 'in') fd.append('half_day', halfDay ? '1' : '0');
 
             const res = await fetch(kind === 'in' ? '/dtr/time-in' : '/dtr/time-out', {
                 method: 'POST',
@@ -275,6 +285,20 @@ function DtrModule() {
         ? parseInt(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', hour12: false }).format(clock.date), 10) % 24
         : 0;
     const timeInClosed = manilaHour >= 20;
+    // The day type can only be chosen before the first time in of the day.
+    const halfDayLocked = !staffId || busy || locked || !!status.day_type;
+    // Warn when a staff member is about to time in after 2:00 PM and before 4:00 PM as a full day:
+    // late would be counted from 10:00 AM. Only before today's first time in
+    // (status.punches === 0 means today's status has loaded and there is no punch yet).
+    const manilaSeconds = clock
+        ? (() => {
+            const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Manila', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(clock.date);
+            const part = (t) => parseInt(parts.find((p) => p.type === t)?.value ?? '0', 10);
+            return (part('hour') % 24) * 3600 + part('minute') * 60 + part('second');
+        })()
+        : 0;
+    const halfDayAdvice = !!staffId && status.punches === 0 && !halfDay
+        && manilaSeconds > 14 * 3600 && manilaSeconds < 16 * 3600;
     const canIn = staffId && camReady && !busy && !locked && !hasOpenPunch && !timeInClosed;
     const canOut = staffId && camReady && !busy && !locked && hasOpenPunch;
 
@@ -299,18 +323,44 @@ function DtrModule() {
                 </div>
             )}
 
-            {/* Staff dropdown */}
-            <select
-                value={staffId}
-                onChange={(e) => setStaffId(e.target.value)}
-                aria-label="Staff name"
-                className="mt-3 lg:mt-[clamp(0.5rem,1.5vh,1rem)] w-full rounded-md border border-gray-300 bg-white px-3 py-2 lg:py-[clamp(0.4rem,1.2vh,0.625rem)] outline-none focus:ring-2 focus:ring-[rgb(240,136,176)] focus:border-[rgb(240,136,176)] transition"
-            >
-                <option value="">Select staff name</option>
-                {staff.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-            </select>
+            {/* Staff dropdown + half day checkbox */}
+            <div className="mt-3 lg:mt-[clamp(0.5rem,1.5vh,1rem)] flex items-center gap-3">
+                <select
+                    value={staffId}
+                    onChange={(e) => setStaffId(e.target.value)}
+                    aria-label="Staff name"
+                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-3 py-2 lg:py-[clamp(0.4rem,1.2vh,0.625rem)] outline-none focus:ring-2 focus:ring-[rgb(240,136,176)] focus:border-[rgb(240,136,176)] transition"
+                >
+                    <option value="">Select staff name</option>
+                    {staff.map((s) => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                </select>
+                <label
+                    className={`flex shrink-0 items-center gap-1.5 text-sm text-gray-700 select-none ${halfDayLocked ? 'opacity-50' : 'cursor-pointer'}`}
+                    title={status.day_type ? `Today is recorded as a ${status.day_type} day` : 'Half day: work time counts from 3:00 PM to 8:00 PM'}
+                >
+                    <input
+                        type="checkbox"
+                        checked={halfDay}
+                        disabled={halfDayLocked}
+                        onChange={(e) => setHalfDay(e.target.checked)}
+                        className="h-4 w-4"
+                        style={{ accentColor: PINK }}
+                    />
+                    Half day
+                </label>
+            </div>
+
+            {halfDayAdvice && (
+                <div
+                    role="alert"
+                    className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium leading-snug lg:text-[clamp(0.85rem,2.1vh,1.05rem)] text-amber-900"
+                >
+                    <strong>Warning:</strong> it is already past 2:00 PM. Timing in as a full day counts late from
+                    10:00 AM. Tick <strong>Half day</strong> to count from 3:00 PM instead.
+                </div>
+            )}
 
             {/* Camera (left, vertical) + action buttons (right) */}
             <div className="mt-3 lg:mt-[clamp(0.5rem,1.5vh,1rem)] flex gap-3 items-stretch lg:flex-1 lg:min-h-0">
