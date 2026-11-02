@@ -7,6 +7,7 @@ import DashboardOverview from './DashboardOverview';
 import SalesManager from './SalesManager';
 import SettingsManager from './SettingsManager';
 import ReportsManager from './ReportsManager';
+import VoucherManager from './VoucherManager';
 import { usePage } from '@inertiajs/react';
 
 const MODULES = [
@@ -99,6 +100,10 @@ export default function DashboardAdmin({ staff, allowedModules = null }) {
   const [selectedId, setSelectedId] = useState('dashboard'); // Defaulting to clients module for easier local workspace access
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [hoveredId, setHoveredId] = useState(null);
+  // Bumped every time the Dashboard icon is pressed. It is the `key` of
+  // <DashboardOverview>, so each press re-mounts the overview fresh: any client
+  // record, payment window, paid report or popup that was open is closed.
+  const [dashboardKey, setDashboardKey] = useState(0);
   // Only show the modules this account's user role has been granted
   // (Settings > User Role). null = no restriction info sent: show all.
   const visibleModules = Array.isArray(allowedModules)
@@ -109,8 +114,10 @@ export default function DashboardAdmin({ staff, allowedModules = null }) {
   const dropdownRef = useRef(null);
 
   function handleSelect(id) {
+    if (id === 'dashboard') setDashboardKey((k) => k + 1); // always land on the overview, even if already on it
     setSelectedId(id);
     setSidebarOpen(false);
+    setDropdownOpen(false);
   }
 
   useEffect(() => {
@@ -307,7 +314,7 @@ export default function DashboardAdmin({ staff, allowedModules = null }) {
                   /* Overview stats/schedule/staff-load, driven by the
                      `dashboard` global prop when the server sends it;
                      falls back to its own mock data otherwise. */
-                  <DashboardOverview data={usePage().props.dashboard} />
+                  <DashboardOverview key={dashboardKey} data={usePage().props.dashboard} />
                 ) : selectedId === 'clients' ? (
                   /* Feed the 'clients' global prop tree collection array cleanly down into the manager */
                   <ClientManager clients={usePage().props.clients} />
@@ -328,6 +335,10 @@ export default function DashboardAdmin({ staff, allowedModules = null }) {
                   /* Daily Sales report: calendar range picker + printable
                      sheet. Loads its own data from /reports/daily-sales. */
                   <ReportsManager />
+                ) : selectedId === 'vouchers' ? (
+                  /* Vouchers: filed by range or individual barcode, same
+                     list + form pattern as the product module. */
+                  <VoucherManager />
                 ) : selectedId === 'settings' ? (
                   /* System settings: left icon rail + right module display
                      area. First module is User Role maintenance. */

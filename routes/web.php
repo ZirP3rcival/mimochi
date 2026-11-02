@@ -13,6 +13,7 @@ use App\Http\Controllers\PositionController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\UserRoleController;
+use App\Http\Controllers\VoucherController;
 use App\Models\Client;
 use App\Models\UserRole;
 use App\Models\DashboardStats;
@@ -29,7 +30,8 @@ Route::get('/', function () {
 // --- Login (guests only) ---
 Route::middleware('guest:staff')->group(function () {
     Route::get('/login', [LoginController::class, 'create'])->name('login');
-    Route::post('/login', [LoginController::class, 'store']);
+    // Brute-force protection: 10 attempts per minute per IP.
+    Route::post('/login', [LoginController::class, 'store'])->middleware('throttle:10,1');
 });
 
 
@@ -137,7 +139,7 @@ Route::middleware(['auth:staff', 'module:clients'])->group(function () {
 // Ordinary staff accounts can use the Clients module, but only admins can
 // view the Users directory or create/edit/disable/delete staff accounts —
 // this is a privileged, staff-table-wide action, unlike managing clients.
-Route::middleware(['auth:staff', 'user_type:admin'])->group(function () {
+Route::middleware(['auth:staff', 'user_type:admin', 'throttle:120,1'])->group(function () {
     Route::get('/staff', [StaffController::class, 'index'])->name('staff.index');
     Route::post('/staff', [StaffController::class, 'store'])->name('staff.store');
     Route::put('/staff/{staff}', [StaffController::class, 'update'])->name('staff.update');
@@ -187,6 +189,15 @@ Route::middleware(['auth:staff', 'module:sales'])->group(function () {
     Route::put('/products/{product}', [ProductController::class, 'update'])->name('products.update');
     Route::patch('/products/{product}/toggle-status', [ProductController::class, 'toggleStatus'])->name('products.toggle_status');
     Route::delete('/products/{product}', [ProductController::class, 'destroy'])->name('products.destroy');
+});
+
+// --- Vouchers module (file vouchers by barcode range or individual barcodes) ---
+Route::middleware(['auth:staff', 'module:vouchers'])->group(function () {
+    Route::get('/vouchers', [VoucherController::class, 'index'])->name('vouchers.index');
+    Route::post('/vouchers', [VoucherController::class, 'store'])->name('vouchers.store');
+    Route::get('/vouchers/{voucherBatch}', [VoucherController::class, 'show'])->whereNumber('voucherBatch')->name('vouchers.show');
+    Route::put('/vouchers/{voucherBatch}', [VoucherController::class, 'update'])->whereNumber('voucherBatch')->name('vouchers.update');
+    Route::delete('/vouchers/{voucherBatch}', [VoucherController::class, 'destroy'])->whereNumber('voucherBatch')->name('vouchers.destroy');
 });
 
 // --- Reports module (DAILY SALES report, expenses, daily salary rates) ---
